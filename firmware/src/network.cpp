@@ -172,6 +172,7 @@ bool connectWiFi() {
 // ── Battery voltage ─────────────────────────────────────────
 
 float readBatteryVoltage() {
+    if (PIN_BAT_ADC < 0) return 0.0f;
     const int SAMPLES = 16;
     const int DISCARD = 2;  // Discard highest and lowest outliers
     int readings[SAMPLES];

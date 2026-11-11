@@ -62,6 +62,17 @@
 #endif
 #define PIN_LED        5
 #define PIN_AI_CHAT_SW -1
+#elif defined(BOARD_PROFILE_WAVESHARE_S3_397)
+#define PIN_EPD_MOSI 12
+#define PIN_EPD_SCK 11
+#define PIN_EPD_CS 10
+#define PIN_EPD_DC 9
+#define PIN_EPD_RST 46
+#define PIN_EPD_BUSY 3
+#define PIN_CFG_BTN 0 // On-board BOOT button
+#define PIN_LED -1
+#define PIN_AI_CHAT_SW -1
+#define PIN_BAT_ADC -1 // Battery is managed by TG28
 #elif defined(BOARD_PROFILE_YD_ESP32_S3_N16R8)
 #define PIN_EPD_MOSI   11
 #define PIN_EPD_SCK    12
