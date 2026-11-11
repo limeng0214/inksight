@@ -172,6 +172,7 @@ bool connectWiFi() {
 // ── Battery voltage ─────────────────────────────────────────
 
 float readBatteryVoltage() {
+    // 没有电压采样引脚时直接返回占位值 0，避免读取无效引脚。
     if (PIN_BAT_ADC < 0) return 0.0f;
     const int SAMPLES = 16;
     const int DISCARD = 2;  // Discard highest and lowest outliers

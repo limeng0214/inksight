@@ -70,6 +70,7 @@ static void EPD_3IN97_SendData(UBYTE Data)
     DEV_Digital_Write(EPD_CS_PIN, 1);
 }
 
+// BUSY 为高时屏幕仍在工作，等它变低后再发送后续指令。
 static void EPD_3IN97_ReadBusy(void)
 {
     Debug("e-Paper busy\r\n");
@@ -80,6 +81,7 @@ static void EPD_3IN97_ReadBusy(void)
     Debug("e-Paper busy release\r\n");
 }
 
+// 下面三种刷新都先用 0x22 设置刷新方式，再用 0x20 启动：F7 全刷、D7 快刷、FF 局刷。
 static void EPD_3IN97_TurnOnDisplay(void)
 {
     EPD_3IN97_SendCommand(0x22);
@@ -104,6 +106,7 @@ static void EPD_3IN97_TurnOnDisplay_Part(void)
     EPD_3IN97_ReadBusy();
 }
 
+// 初始化时设定扫描范围和图像写入起点。800 × 480 屏的最后一个像素坐标为 (799, 479)。
 void EPD_3IN97_Init(void)
 {
     EPD_3IN97_Reset();
@@ -210,6 +213,7 @@ void EPD_3IN97_Init_Fast(void)
 
 }
 
+// 每个字节表示 8 个黑白像素。整屏共 48000 字节，分别写入 0x24 和 0x26 两个图像存储区。
 void EPD_3IN97_Display_Base(const UBYTE *Image)
 {
     UWORD Width, Height;
@@ -258,6 +262,7 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image)
     EPD_3IN97_TurnOnDisplay_Fast();
 }
 
+// 局刷只传入选中矩形的图像。调用方传入的结束坐标不含在矩形内，写入前按字节换算横向范围。
 void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, UWORD Xend, UWORD Yend)
 {
 	if((Xstart % 8 + Xend % 8 == 8 && Xstart % 8 > Xend % 8) || Xstart % 8 + Xend % 8 == 0 || (Xend - Xstart)%8 == 0)
@@ -315,6 +320,7 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
 	EPD_3IN97_TurnOnDisplay_Part();
 }
 
+// 刷新完成后让屏幕控制器休眠，墨水屏仍会保留已有画面。
 void EPD_3IN97_Sleep(void)
 {
     EPD_3IN97_SendCommand(0x10); //enter deep sleep

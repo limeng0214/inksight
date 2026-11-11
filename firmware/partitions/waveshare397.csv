@@ -1,6 +1,8 @@
 # Name,   Type, SubType, Offset,   Size, Flags
+# nvs 保存设置；otadata 在 0xe000，记录启动时选择的程序分区。
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
+# 两个程序分区各占 5 MB，最后一段留给文件系统。
 app0,     app,  ota_0,   0x10000,  0x500000,
 app1,     app,  ota_1,   0x510000, 0x500000,
 spiffs,   data, spiffs,  0xa10000, 0x5f0000,

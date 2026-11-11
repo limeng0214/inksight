@@ -1,6 +1,7 @@
 #include "epd_driver.h"
 #include "config.h"
 
+// 选择 3.97 英寸配置时，使用下面这份微雪屏幕驱动。
 #if defined(EPD_PANEL_397_SSD1677)
 #include "waveshare397.inc"
 #elif defined(EPD_PANEL_42_SSD1683_BW) || defined(EPD_PANEL_42_DKE_RY683) || defined(EPD_PANEL_42_GDEM042F52)

@@ -63,15 +63,18 @@
 #define PIN_LED        5
 #define PIN_AI_CHAT_SW -1
 #elif defined(BOARD_PROFILE_WAVESHARE_S3_397)
+// 以下为一体板内部接线。MOSI 传数据，SCK 提供时钟，CS 选中屏幕。
 #define PIN_EPD_MOSI 12
 #define PIN_EPD_SCK 11
 #define PIN_EPD_CS 10
+// DC 区分指令和图像数据，RST 复位屏幕，BUSY 表示屏幕是否正在刷新。
 #define PIN_EPD_DC 9
 #define PIN_EPD_RST 46
 #define PIN_EPD_BUSY 3
 #define PIN_CFG_BTN 0 // On-board BOOT button
 #define PIN_LED -1
 #define PIN_AI_CHAT_SW -1
+// 此板通过电源管理芯片管理电池，-1 表示停用模拟引脚测量。
 #define PIN_BAT_ADC -1 // Battery is managed by TG28
 #elif defined(BOARD_PROFILE_YD_ESP32_S3_N16R8)
 #define PIN_EPD_MOSI   11

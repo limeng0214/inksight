@@ -1,3 +1,4 @@
+// 文件名加上项目名，避免在 Mac 上与开发工具自带的 Network.h 重名。
 #ifndef INKSIGHT_NETWORK_H
 #define INKSIGHT_NETWORK_H
 

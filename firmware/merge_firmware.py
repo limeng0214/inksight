@@ -24,6 +24,7 @@ def merge_bin(source, target, env):
     print(f"  APP -> 0x10000 {firmware}")
     print("==========================")
 
+    # 新版烧录工具是独立程序；按开发工具给出的地址合并各部分，生成从 0x0 写入的完整固件。
     modern = env.PioPlatform().get_package_dir("tool-esptool") if "tool-esptool" in env.PioPlatform().packages else None
     if modern and not os.path.isfile(esptool):
         exe = os.path.join(modern, "esptool.exe" if os.name == "nt" else "esptool")
