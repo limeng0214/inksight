@@ -1,5 +1,6 @@
 Import("env")
 import os
+import subprocess
 
 def merge_bin(source, target, env):
     firmware = str(target[0])
@@ -11,7 +12,7 @@ def merge_bin(source, target, env):
     flash_size = board.get("upload.flash_size", "4MB")
 
     esptool = os.path.join(
-        env.PioPlatform().get_package_dir("tool-esptoolpy") or "",
+        (env.PioPlatform().get_package_dir("tool-esptoolpy") or "") if "tool-esptoolpy" in env.PioPlatform().packages else "",
         "esptool.py",
     )
     output = os.path.join(env.subst("$BUILD_DIR"), "firmware_merged.bin")
@@ -22,6 +23,16 @@ def merge_bin(source, target, env):
         print(f"  {offset} -> {env.subst(path)}")
     print(f"  APP -> 0x10000 {firmware}")
     print("==========================")
+
+    modern = env.PioPlatform().get_package_dir("tool-esptool") if "tool-esptool" in env.PioPlatform().packages else None
+    if modern and not os.path.isfile(esptool):
+        exe = os.path.join(modern, "esptool.exe" if os.name == "nt" else "esptool")
+        args = [exe, "--chip", mcu, "merge-bin", "-o", output]
+        for offset, path in extra:
+            args.extend([str(offset), env.subst(path)])
+        args.extend(["0x10000", firmware])
+        subprocess.run(args, check=True)
+        return
 
     cmd = [
         "$PYTHONEXE", esptool,

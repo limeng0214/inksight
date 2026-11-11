@@ -1,4 +1,4 @@
-#include "network.h"
+#include "inksight_network.h"
 #include "config.h"
 #include "storage.h"
 #include "certs.h"
