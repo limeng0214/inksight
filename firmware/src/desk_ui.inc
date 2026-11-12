@@ -1,78 +1,167 @@
-// 微雪三向键：向上 GPIO4、中按 GPIO5、向下 GPIO6。低电平表示按下。
 #include <Preferences.h>
+#include <WebServer.h>
+#include <LittleFS.h>
+#include <mbedtls/base64.h>
+#include <Adafruit_GFX.h>
 #include <desk_art.inc>
+#include "desk_parent.inc"
+
 namespace desk {
+enum Page { Schedule, Clock, Reading, Bed, Memo, PageCount };
+Page page=Schedule;
 Preferences prefs;
-int page=0, preview=-1, weekday=-1, reading=0, stage=0, dayKey=0, shown=-1;
-bool hint=false, dirty=true, birthdayToday=false;
+WebServer parent(80);
+QueueHandle_t keys;
+bool dirty=true, note=false, hint=false, birthdayCard=false;
+int offset=1, stage=0, lastSecond=-1;
 uint32_t remaining=360000, started=0;
-uint8_t region[40*104];
-uint32_t left(){uint32_t used=millis()-started;return stage==1?(used<remaining?remaining-used:0):remaining;}
-void saveStep(){if(dayKey){prefs.putInt("day",dayKey);prefs.putInt("step",stage>=3?stage:0);}}
-// 联网校准日期后选择当天课表，并恢复当天已确认的睡前步骤。
+tm localDay{};
+String dateKey, lastClock, lastAddress;
+constexpr int memoWidth=736, memoHeight=288, memoBytes=memoWidth*memoHeight/8;
+uint8_t timerRegion[40*104];
+GFXcanvas1 clockArea(320,104), dateArea(740,46);
+
+String dateOf(const tm &value){
+ char out[16];strftime(out,sizeof(out),"%Y-%m-%d",&value);return String(out);
+}
+uint32_t left(){
+ if(stage!=1)return remaining;
+ uint32_t elapsed=millis()-started;
+ return elapsed>=remaining?0:remaining-elapsed;
+}
+void saveStep(){
+ if(dateKey.length()){prefs.putString("date5",dateKey);prefs.putUChar("stage5",stage>=3?stage:0);}
+}
+// 每天的清单独立保存；跨日时按北京时间计算课表和诗文。
 void calendar(){
  time_t now=time(nullptr);if(now<1700000000)return;
- tm d;localtime_r(&now,&d);int k=(1900+d.tm_year)*1000+d.tm_yday;
- if(k==dayKey)return;
- bool first=dayKey==0;dayKey=k;weekday=d.tm_wday;reading=d.tm_yday%7;preview=-1;hint=false;
- birthdayToday=d.tm_mon==10 && d.tm_mday==21;
- if(first && prefs.getInt("day",0)==k)stage=prefs.getInt("step",0);
- if(!first){stage=0;remaining=360000;}
- if(birthdayToday && first)page=3;
+ tm d;localtime_r(&now,&d);localDay=d;String today=dateOf(d);
+ if(today==dateKey)return;
+ bool first=dateKey.isEmpty();dateKey=today;offset=1;hint=note=false;
+ if(!first||stage!=1){remaining=360000;stage=prefs.getString("date5","")==today?prefs.getUChar("stage5",0):0;}
+ if(stage>7)stage=0;
+ birthdayCard=d.tm_mon==10&&d.tm_mday==21&&prefs.getString("birth5","")!=today;
  dirty=true;
 }
-// 整页切换时合成数字；倒计时期间只重绘数字占用的矩形。
-void clockDraw(int sec,bool full){
+void blit(const uint8_t *pixels,int stride,int x,int y,int rows){
+ for(int i=0;i<rows;i++)memcpy(imgBuf+(y+i)*100+x/8,pixels+i*stride,stride);
+}
+void ascii(GFXcanvas1 &surface,const char *value,int size,int x,int y){
+ surface.setTextWrap(false);surface.setTextColor(0);surface.setTextSize(size);surface.setCursor(x,y);surface.print(value);
+}
+void dateLabel(String text,int x,int y,int size){
+ dateArea.fillScreen(1);ascii(dateArea,text.c_str(),size,0,0);
+ int bytes=min((int)((text.length()*6*size+7)/8),(800-x)/8);
+ for(int i=0;i<8*size;i++)memcpy(imgBuf+(y+i)*100+x/8,dateArea.getBuffer()+i*93,bytes);
+}
+void drawClock(bool full){
+ char value[12]="--:--";if(dateKey.length())snprintf(value,sizeof(value),"%2d:%02d%s",localDay.tm_hour%12?localDay.tm_hour%12:12,localDay.tm_min,localDay.tm_hour<12?"AM":"PM");
+ String text=value;if(!full&&text==lastClock)return;
+ clockArea.fillScreen(1);ascii(clockArea,text.substring(0,5).c_str(),8,0,18);ascii(clockArea,text.substring(5).c_str(),3,245,52);
+ if(full)blit(clockArea.getBuffer(),40,24,180,104);
+ else {
+  int first=0;while(first<5&&text[first]==lastClock[first])first++;
+  int end=5;while(end>first&&text[end-1]==lastClock[end-1])end--;
+  int x=first*48,stop=end*48;if(text.substring(5)!=lastClock.substring(5))stop=288;
+  int bytes=(stop-x)/8;
+  if(bytes>0){for(int y=0;y<104;y++)memcpy(timerRegion+y*bytes,clockArea.getBuffer()+40*y+x/8,bytes);epdPartialDisplay(timerRegion,24+x,180,24+stop,284);}
+ }
+ lastClock=text;
+}
+void drawTimer(int sec,bool full){
  int codes[]={sec/600,sec/60%10,10,sec%60/10,sec%10};
- for(int y=0;y<104;y++)for(int i=0;i<5;i++)memcpy(region+y*40+i*8,digits[codes[i]]+y*8,8);
- if(full){for(int y=0;y<104;y++)memcpy(imgBuf+(204+y)*100+30,region+y*40,40);}
- else epdPartialDisplay(region,240,204,560,308);
- shown=sec;
+ for(int y=0;y<104;y++)for(int i=0;i<5;i++)memcpy(timerRegion+y*40+i*8,digits[codes[i]]+y*8,8);
+ if(full)blit(timerRegion,40,32,192,104);else epdPartialDisplay(timerRegion,32,192,352,296);
+ lastSecond=sec;
+}
+// 一个文件保存原文和图像，临时文件写完再改名，避免更新中途断电造成半条留言。
+String memoPath(const String &date){return "/desk-"+date;}
+bool validDate(const String &s){
+ if(s.length()!=10||s[4]!='-'||s[7]!='-')return false;
+ for(int i=0;i<10;i++)if(i!=4&&i!=7&&!isDigit(s[i]))return false;
+ return true;
+}
+void setupParent(){
+ parent.on("/",HTTP_GET,[]{parent.send_P(200,"text/html;charset=utf-8",parentHTML);});
+ parent.on("/notes",HTTP_GET,[]{
+  String d=parent.arg("date");if(!validDate(d)){parent.send(400);return;}
+  File f=LittleFS.open(memoPath(d),"r");String text;
+  if(f&&f.size()>=memoBytes){f.seek(memoBytes);text=f.readString();}parent.send(200,"text/plain;charset=utf-8",text);
+ });
+ parent.on("/notes",HTTP_POST,[]{
+  String d=parent.arg("date"),text=parent.arg("text"),encoded=parent.arg("pixels");
+  if(!validDate(d)||text.length()>2000||encoded.length()>4*((2*memoBytes+2)/3)||encoded.isEmpty()){parent.send(400);return;}
+  auto *buf=(uint8_t*)malloc(memoBytes);if(!buf){parent.send(503);return;}
+  size_t packedSize=encoded.length()/4*3;
+  auto *packed=(uint8_t*)malloc(packedSize);if(!packed){free(buf);parent.send(503);return;}
+  size_t count=0,n=0;int err=mbedtls_base64_decode(packed,packedSize,&count,(const uint8_t*)encoded.c_str(),encoded.length());
+  if(count%2)err=-1;
+  for(size_t i=0;!err&&i<count;i+=2){size_t run=packed[i];if(!run||run>memoBytes-n){err=-1;break;}memset(buf+n,packed[i+1],run);n+=run;}
+  free(packed);
+  bool ok=false;
+  if(!err&&n==memoBytes){
+   String path=memoPath(d);
+   if(text.isEmpty())ok=!LittleFS.exists(path)||LittleFS.remove(path);
+   else{File f=LittleFS.open("/desk.tmp","w");ok=f&&f.write(buf,n)==n&&f.print(text)==text.length();f.close();if(ok)ok=LittleFS.rename("/desk.tmp",path);}
+  }
+  free(buf);if(ok&&page==Memo&&d==dateKey)dirty=true;parent.send(ok?200:500);
+ });parent.begin();
 }
 void draw(){
- int sec=(left()+999)/1000;
- if(dirty){
- int d=preview<0?weekday:preview;
- const uint8_t *art=page==0?(d<0?nosync:schoolArt[d]):page==1?readArt[reading*2+hint]:page==2?bedArt[stage]:birthday;
- memcpy(imgBuf,art,48000);if(page==2 && stage<3)clockDraw(sec,true);
+ int sec=stage>=3?0:(left()+999)/1000;
+ if(!dirty){if(!birthdayCard&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
+ const uint8_t *art=nullptr;
+ if(birthdayCard)art=birthday;
+ else switch(page){
+ case Schedule:{int w=(localDay.tm_wday+offset)%7;art=dateKey.isEmpty()?nosync:(offset==1?tomorrowArt[w]:schoolArt[w]);break;}
+ case Clock:art=poemArt[(localDay.tm_yday%2)*2+note];break;
+ case Reading:art=readArt[(localDay.tm_yday%7)*2+hint];break;
+ case Bed:art=bedArt[stage];break;
+ case Memo:art=LittleFS.exists(memoPath(dateKey))?memoPage:memoEmpty;break;
+ default:return;
+ }
+ memcpy(imgBuf,art,48000);
+ if(!birthdayCard){
+  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);dateLabel(header,32,30,3);drawClock(true);}
+  if(page==Bed)drawTimer(sec,true);
+  if(page==Schedule&&dateKey.length()){tm d=localDay;d.tm_mday+=offset;mktime(&d);dateLabel(dateOf(d),568,41,3);}
+  if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
+   lastAddress=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline");dateLabel(lastAddress,480,41,3);}
+ }
  epdDisplayFast(imgBuf);dirty=false;
- }else if(page==2 && stage==1 && sec!=shown)clockDraw(sec,false);
 }
-// 两侧键循环翻页，中键根据当前页面执行查看、暂停或确认。
 void press(int key){
- if(key!=5){int count=birthdayToday?4:3;page=(page+count+(key==4?-1:1))%count;preview=-1;}
- else if(page==0)preview=preview<0?(weekday<0?1:(weekday+1)%7):(preview+1)%7;
- else if(page==1)hint=!hint;
- else if(page==2){
- if(stage==0||stage==2){started=millis();stage=1;}
- else if(stage==1){remaining=left();stage=2;}
- else if(stage<6){++stage;saveStep();}
+ if(birthdayCard){birthdayCard=false;prefs.putString("birth5",dateKey);}
+ else if(key!=5){page=Page((page+PageCount+(key==4?-1:1))%PageCount);offset=1;note=hint=false;}
+ else switch(page){
+ case Schedule:offset=offset%7+1;break;
+ case Clock:note=!note;break;
+ case Reading:hint=!hint;break;
+ case Bed:if(stage==0||stage==2){started=millis();stage=1;}else if(stage==1){remaining=left();stage=remaining?2:3;}else if(stage<7)++stage;saveStep();break;
+ default:return;
  }
  dirty=true;
 }
-// 屏幕刷新会短暂阻塞；独立采集按键，避免漏掉刷新期间的短按。
-QueueHandle_t keyQueue;
+// 刷屏期间独立采集按键，消抖后交给主循环。
 void collectKeys(void*){
- for(;;){
- static int sample=-1,stable=-1;static uint32_t changed=0;int key=-1;
- for(int p=4;p<=6;p++)if(digitalRead(p)==LOW){key=p;break;}
- if(key!=sample){sample=key;changed=millis();}
- if(sample!=stable && millis()-changed>=30){stable=sample;if(stable>=0)xQueueSend(keyQueue,&stable,0);}
- vTaskDelay(pdMS_TO_TICKS(10));
- }
+ int sample=-1,stable=-1;uint32_t changed=0;
+ for(;;){int k=-1;for(int p=4;p<=6;p++)if(digitalRead(p)==LOW){k=p;break;}
+ if(k!=sample){sample=k;changed=millis();}
+ if(sample!=stable&&millis()-changed>=30){stable=sample;if(k>=0)xQueueSend(keys,&k,0);}
+ vTaskDelay(pdMS_TO_TICKS(10));}
 }
 void begin(){
  for(int p=4;p<=6;p++)pinMode(p,INPUT_PULLUP);
- keyQueue=xQueueCreate(12,sizeof(int));
- configASSERT(keyQueue);
+ keys=xQueueCreate(12,sizeof(int));configASSERT(keys);
  xTaskCreate(collectKeys,"deskKeys",2048,nullptr,2,nullptr);
  prefs.begin("desk",false);WiFi.mode(WIFI_STA);WiFi.begin(cfgSSID.c_str(),cfgPass.c_str());
- configTime(8*3600,0,"ntp.aliyun.com","pool.ntp.org");
+ configTime(8*3600,0,"ntp.aliyun.com","pool.ntp.org");setupParent();
 }
 void poll(){
- calendar();if(stage==1 && left()==0){stage=3;page=2;saveStep();dirty=true;}
- int key;
- if(xQueueReceive(keyQueue,&key,0)==pdTRUE)press(key);
+ calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;page=Bed;saveStep();dirty=true;}
+ parent.handleClient();
+ if(page==Memo&&(WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline"))!=lastAddress)dirty=true;
+ int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
  draw();delay(5);
 }
 }

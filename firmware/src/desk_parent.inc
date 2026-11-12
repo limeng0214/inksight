@@ -1,0 +1,12 @@
+// 家长手机把中文排版成黑白像素，板子可显示任意姓名和汉字，无需整套中文字库。
+static const char parentHTML[] PROGMEM=R"DESK(<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>爸妈留言</title><style>body{max-width:700px;margin:28px auto;padding:12px;font:18px system-ui}textarea,canvas{width:100%;box-sizing:border-box}canvas{border:1px solid}button,input,textarea{font:inherit}label{display:block;margin:15px 0}</style><h1>爸妈留言</h1><label>显示日期 <input type=date id=date></label><label>每行一条<textarea rows=5 id=words maxlength=500></textarea></label><canvas id=preview width=736 height=288></canvas><p><button id=save>保存到课桌</button> <span id=statusText></span></p><script>
+const $=id=>document.getElementById(id),ctx=$('preview').getContext('2d'),date=$('date'),words=$('words'),statusText=$('statusText');
+date.value=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
+function paint(){ctx.fillStyle='white';ctx.fillRect(0,0,736,288);ctx.fillStyle='black';ctx.font='28px sans-serif';ctx.textBaseline='top';let y=4;
+words.value.split(/\r?\n/).map(t=>t.trim()).filter(Boolean).forEach((t,i)=>{ctx.fillText((i+1)+'.',3,y);let row='';for(const ch of t){if(row&&ctx.measureText(row+ch).width>676){ctx.fillText(row,52,y);y+=38;row=''}row+=ch}ctx.fillText(row,52,y);y+=46});return y<=298}
+// 连续白色像素只发送一次，缩短手机上传时间。
+function pack(raw){let pairs='';for(let i=0;i<raw.length;){let end=i+1;while(end<raw.length&&end-i<255&&raw[end]===raw[i])end++;pairs+=String.fromCharCode(end-i)+raw[i];i=end}return btoa(pairs)}
+let serial=0;async function load(){let n=++serial;$('save').disabled=true;try{let r=await fetch('/notes?date='+date.value,{cache:'no-store'});if(!r.ok)throw Error();let t=await r.text();if(n!==serial)return;words.value=t;paint();statusText.textContent='';$('save').disabled=false}catch{statusText.textContent='读取失败，请刷新重试'}}
+date.onchange=load;words.oninput=()=>{statusText.textContent=paint()?'':'内容超过一屏，请缩短。'};
+$('save').onclick=async()=>{if(!paint()){statusText.textContent='内容超过一屏，请缩短。';return}let data=ctx.getImageData(0,0,736,288).data,raw='';for(let i=0;i<data.length;i+=32){let b=0;for(let j=0;j<8;j++)b=b*2+(data[i+4*j]>155?1:0);raw+=String.fromCharCode(b)}try{let r=await fetch('/notes',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({date:date.value,text:words.value.trim(),pixels:pack(raw)})});statusText.textContent=r.ok?'已保存':'保存失败，请重试'}catch{statusText.textContent='连接中断，请重试'}};load();
+</script>)DESK";
