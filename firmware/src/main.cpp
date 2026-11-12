@@ -1018,6 +1018,9 @@ static bool decodeVoiceBmpToFrameBuffer(const uint8_t *bmpBytes, size_t bmpLen);
 // setup() — display build
 // ═════════════════════════════════════════════════════════════
 
+#if defined(INKSIGHT_DESK_UI)
+#include "desk_ui.inc"
+#endif
 void setup() {
     ledInit();
     Serial.begin(115200);
@@ -1062,6 +1065,10 @@ void setup() {
         return;
     }
 
+#if defined(INKSIGHT_DESK_UI)
+    desk::begin();
+    return;
+#endif
     int retryCount = getRetryCount();
     Serial.printf("Retry count: %d/%d\n", retryCount, MAX_RETRY_COUNT);
 
@@ -1226,6 +1233,10 @@ void loop() {
         return;
     }
 
+#if defined(INKSIGHT_DESK_UI)
+    desk::poll();
+    return;
+#endif
     checkConfigButton();
     checkAiChatButton();
 

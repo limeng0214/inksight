@@ -1,0 +1,80 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>我的课桌 · 五页规格演示</title>
+<style>*{box-sizing:border-box}body{background:white;color:black;margin:28px auto;padding:0 16px;max-width:850px;font:16px/1.6 system-ui}header,nav,.ctrl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:24px}canvas{width:100%;max-width:800px;height:auto;display:block;outline:2px solid black;image-rendering:pixelated}button,input,textarea{font:inherit;background:white;color:black;border:1px solid black;padding:5px 12px}button,summary{cursor:pointer}button[aria-current=true]{color:white;background:black}nav,.ctrl{margin:16px 0}.ctrl{justify-content:center}details{border-top:1px solid;padding:10px 0}summary{font-weight:650}textarea{width:100%}p{margin:8px 0}li{margin-bottom:6px}</style>
+<header><h1>我的课桌</h1><span>横屏规格演示 · 800 × 480</span></header>
+<nav id="tabs" aria-label="直接选页"></nav><canvas width="800" height="480" id="screen" aria-label="黑白墨水屏预览" tabindex="0"></canvas>
+<div class="ctrl"><button id="prev">↑ 上拨</button><button id="act">● 中按</button><button id="next">↓ 下拨</button></div>
+<details open><summary>演示设置</summary><p>用方向键翻页，回车模拟中按。日期按北京时间。选择其他日期可检查课表和生日画面。</p><label>演示日期 <input id="day" type="date"></label> <button id="today">恢复今天</button> <button id="skip">体验倒计时最后 5 秒</button></details>
+<details><summary>家长后台 · 本机模拟</summary><p>给所选日期留言，每行一条。保存后，打开「爸妈留言」即可查看。</p><textarea id="memo" rows="4" aria-label="留言内容"></textarea><button id="send">保存并查看留言</button> <span id="status" role="status"></span></details>
+<details open><summary>五页规格</summary><ol><li><b>明日课程</b>　按自然日显示明天，周末也照常显示。列出校内课程、课外班和晚自习，中按预览后一天。天气可在后台接通后补充。</li><li><b>英文时钟与古诗</b>　英文日期、星期和 12 小时时间。每分钟仅重绘变化的时间字符。跨日更换日期与诗；中按可查看注解。示范诗待按孩子实际教材单元核定。</li><li><b>每日阅读</b>　每天一段短文和一个问题，中按展开提示。演示使用本地轮换内容，后续计划从后台更新。</li><li><b>睡前打卡</b>　中按开始、暂停或继续 6 分钟反转拍；翻页继续计时，到时回到睡前页。右侧常驻待办清单，按顺序确认滴眼药水、刷牙、洗脚、戴 OK 镜，完成一项勾选一项。</li><li><b>爸妈留言</b>　同一天的留言按填写顺序编号，同屏显示。中按无需确认。家长编辑时限制总行数，确保屏上能看全。</li></ol><p>11 月 21 日首次打开显示生日卡，中按进入日常五页。设置和模拟后台都在屏幕外。此文件可离线打开。</p></details>
+<script>
+const school=[[],['语文','英语','数学','科学','地方课程','班会','数学'],['语文','数学','信息','体育','科学','语文','英语'],['数学','语文','道法','语文','美术','体育','数学'],['语文','数学','美术','音乐','英语','书法','语文','晚自习'],['综合实践活动','语文','英语','音乐','道法','体育','语文','晚自习'],[]];
+const extra=['','','17:30　钢琴课','19:10　THINK 在线英语课','','',''];
+const readings=[
+['雨停了。楼下的孩子把纸船放进水沟，又赶到前面的拐角，捞走卡在那里的树枝。','他为什么先跑去捞树枝？','把「前面的拐角」和纸船将要经过的路线连起来想。'],
+['爷爷的旧尺子缺了一个角。我送他一把新的。他把新尺放进工具箱，却把旧尺挂回墙上。尺子背面，刻着爸爸小时候的身高。','最后一句让你怎样重新理解爷爷的动作？','试着用「原先我以为……读到最后我发现……」说两句。'],
+['操场上风很大，接力棒掉在地上。小北捡起它时，前面的人已经跑远了。他听见身后有人喊自己的名字，便把棒子握紧了一点。','哪一个动作透露了小北心情的变化？','找出听到喊声前后手上的动作，再说说你的推测。'],
+['阿姨每天在店门口摆两只水碗。今天下雨，她只把碗往屋檐里挪了挪。傍晚，一只湿漉漉的小狗熟门熟路地钻了进来。','「熟门熟路」告诉了你文中没有直接说出的哪件事？','想想这是不是小狗第一次来，找两个依据。'],
+['山路分成两条。弟弟指着更宽的一条说，走这里。姐姐蹲下来，发现窄路边有新鲜的自行车印。送信的叔叔刚骑车上山。','如果要找送信人，你会选哪条路？证据够不够确定？','区分「更可能」和「一定」，再说出理由。'],
+['妈妈回家时，饭桌边多了一张歪歪扭扭的小凳子。弟弟一声不响地坐上去，把原来那张有靠背的椅子朝她推了推。','不用「体贴」这个词，你能说出弟弟在想什么吗？','从两张椅子的不同之处入手。'],
+['清早，我以为窗外有人敲门。推开窗，只有一根竹枝轻轻碰着玻璃。晚上再听见那声音，我忽然觉得屋里没那么静了。','同一个声音，早晚给「我」的感觉有什么变化？','找出第一次听见时的动作，再读最后一句。']];
+const el=id=>document.getElementById(id),c=el('screen'),g=c.getContext('2d',{willReadFrequently:true}),names=['明日课程','英文时钟','每日阅读','睡前打卡','爸妈留言'];
+const poems=[['山居秋暝','王维','空山新雨后，天气晚来秋。','明月松间照，清泉石上流。','竹喧归浣女，莲动下渔舟。','随意春芳歇，王孙自可留。','雨后山中，有月光、清泉，也有归来的浣女和渔舟。'],['枫桥夜泊','张继','月落乌啼霜满天，','江枫渔火对愁眠。','姑苏城外寒山寺，','夜半钟声到客船。','诗人夜泊枫桥，从船上望见渔火，听到远处钟声。']];
+const bj=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
+let date=bj(),live=true,p=0,offset=1,hint=false,explain=false,bday=false,stamp='',lastSeconds=-1,bed;
+const memory={};function get(k,f){try{return JSON.parse(localStorage.getItem('desk5/'+k))??f}catch{return memory[k]??f}}function put(k,v){memory[k]=v;try{localStorage.setItem('desk5/'+k,JSON.stringify(v))}catch{}}
+const utc=(n=0)=>new Date(Date.parse(date+'T00:00:00Z')+86400000*n),idx=()=>Math.floor(+utc()/86400000),when=(d,lang,options)=>d.toLocaleDateString(lang,{timeZone:'UTC',...options});
+const cn=d=>when(d,'zh-CN',{month:'long',day:'numeric',weekday:'long'}),messages=()=>get('memo/'+date,[]),saveBed=()=>put('bed/'+date,{...bed,version:2});
+function selectDate(d){date=d;el('day').value=d;offset=1;hint=explain=false;bed=get('bed/'+date,{stage:0,left:360000,end:0});if(!bed.version){if(bed.stage>=5)bed.stage++;bed.version=2;saveBed()}bday=date.endsWith('11-21')&&!get('opened/'+date,false);el('memo').value=messages().join('\n');el('status').textContent='';draw()}
+function ink(x=0,y=0,w=800,h=480){const im=g.getImageData(x,y,w,h);for(let i=0;i<im.data.length;i+=4){let v=im.data[i]>155?255:0;im.data[i]=im.data[i+1]=im.data[i+2]=v}g.putImageData(im,x,y)}
+function clear(x=0,y=0,w=800,h=480){g.fillStyle='white';g.fillRect(x,y,w,h);g.fillStyle='black'}function font(size,bold=false){g.font=(bold?'bold ':'')+size+'px system-ui,sans-serif';g.textBaseline='top'}function txt(s,x,y,size=30,b=false){font(size,b);g.fillText(s,x,y)}
+function line(x,y,w,h=2){g.fillRect(x,y,w,h)}function wrap(s,w,size){font(size);let a=[''];for(const ch of s){let i=a.length-1;if(a[i]&&g.measureText(a[i]+ch).width>w)a.push(ch);else a[i]+=ch}return a}
+function para(s,x,y,w,size){for(const l of wrap(s,w,size)){txt(l,x,y,size);y+=size+12}return y}
+function title(t,sub){txt(t,30,23,37,true);txt(sub,552,39,20);line(30,84,740)}
+function foot(s){line(30,422,740,1);txt(s,30,439,19);txt((p+1)+' / 5',710,439,19)}
+function clock(){let parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date()).split(':');let h=+parts[0];return String(h%12||12).padStart(2,' ') +':'+parts[1]+(h<12?'AM':'PM')}
+// 到整分钟只更新有变化的数字区域，AM/PM 和诗文可独立保留。
+function clockPaint(force){
+ const t=clock(),single=t[0]===' ',shift=single?-23:0;
+ const repaint=force||(stamp[0]===' ')!==single;
+ if(repaint)clear(24,182,320,90);
+ const xs=[32,84,136,163,215],ws=[52,52,27,52,52];
+ for(let i=0;i<5;i++)if(repaint||stamp[i]!==t[i]){
+  const x=xs[i]+shift;clear(x,182,ws[i],90);txt(t[i],x,182,78,true);ink(x,182,ws[i],90);
+ }
+ if(repaint||stamp.slice(5)!==t.slice(5)){const x=273+shift;clear(x,224,63,42);txt(t.slice(5),x,224,27,true);ink(x,224,63,42)}
+ stamp=t;
+}
+const left=()=>bed.end?Math.max(0,bed.end-Date.now()):bed.left;
+function timerPaint(){let s=Math.ceil(left()/1000);clear(30,170,370,128);txt(String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'),32,171,102,true);ink(30,170,370,128);lastSeconds=s}
+function draw(){clear();[...el('tabs').children].forEach((b,i)=>b.setAttribute('aria-current',String(!bday&&p===i)));
+if(bday){txt('NOVEMBER 21',32,42,23);txt('生日快乐！',30,135,62,true);txt('愿你一直对世界好奇。',34,245,33);txt('中按进入课桌',34,429,22);ink();return}
+if(p===0){let d=utc(offset),w=d.getUTCDay(),a=school[w];title((offset===1?'明日课程':'课程预览')+' · '+when(d,'zh-CN',{weekday:'long'}),when(d,'zh-CN',{month:'long',day:'numeric'}));if(!a.length)txt('没有校内课程',32,166,39);else{[['上午',a.slice(0,4)],['下午',a.slice(4,7)],['晚上',[a[7]||extra[w]].filter(Boolean)]].forEach(([k,v],i)=>{if(v.length){txt(k,32,123+87*i,24,true);txt(v.join('　'),126,120+i*87,29)}})}foot('上下拨动翻页　·　中按查看后一天')}
+if(p===1){txt(when(utc(),'en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'}),30,30,33,true);line(30,87,740);line(350,119,1,268);let a=poems[idx()%poems.length];txt(a[0],380,124,33,true);txt(a[1],380,172,22);if(explain)para(a[6],380,218,375,25);else a.slice(2,6).forEach((l,i)=>txt(l,380,213+40*i,25));clockPaint(true);foot('SCROLL · Turn page     PRESS · '+(explain?'Read poem':'Show note'))}
+if(p===2){let r=readings[idx()%7];title('每日阅读',cn(utc()));let y=para(r[0],32,111,736,29);line(32,y+9,736,1);para(hint?r[2]:r[1],32,y+32,736,26);foot(hint?'中按回到问题':'先想一想，再中按查看提示')}
+// 反转拍计时与翻页独立；右侧四项按中键依次确认。
+if(p===3){
+ title('睡前打卡',cn(utc()));line(416,108,1,282);
+ txt('反转拍',32,119,32,true);timerPaint();
+ txt(['准备开始','计时中','已暂停'][bed.stage]||'计时完成',32,313,24);
+ txt('睡前待办',450,116,28,true);
+ ['滴眼药水','刷牙','洗脚','戴 OK 镜'].forEach((task,i)=>{
+  const y=177+54*i,done=bed.stage>3+i,current=bed.stage===3+i;
+  g.lineWidth=2;g.strokeRect(452,y+5,25,25);
+  if(done){g.beginPath();g.moveTo(456,y+17);g.lineTo(462,y+24);g.lineTo(474,y+10);g.stroke()}
+  txt(task,495,y,29,current);if(current)txt('当前',700,y+4,20,true);
+ });
+ foot(['中按开始','中按暂停　·　翻页后继续计时','中按继续'][bed.stage]||
+      (bed.stage===7?'今晚已完成　·　上下拨动翻页':'中按勾选当前事项'));
+}
+if(p===4){title('爸妈留言',cn(utc()));let y=112,m=messages();if(!m.length)txt('今天没有留言',32,y,31);m.forEach((s,i)=>{txt((i+1)+'.',32,y,27,true);y=para(s,81,y,680,27)+8});foot('上下拨动翻页')}
+ink()}
+function birthdayClose(){bday=false;put('opened/'+date,true)}
+function go(i){if(bday)birthdayClose();p=(i+5)%5;offset=1;hint=explain=false;draw()}
+function action(){if(bday){birthdayClose();draw();return}if(p===0)offset=offset%7+1;if(p===1)explain=!explain;if(p===2)hint=!hint;if(p===3){if(bed.stage===0||bed.stage===2){bed.end=Date.now()+bed.left;bed.stage=1}else if(bed.stage===1){bed.left=left();bed.end=0;bed.stage=bed.left?2:3}else if(bed.stage<7)bed.stage++;saveBed()}draw()}
+names.forEach((s,i)=>{let b=document.createElement('button');b.textContent=s;b.onclick=()=>go(i);el('tabs').append(b)});el('act').onclick=action;el('prev').onclick=()=>go(p-1);el('next').onclick=()=>go(p+1);
+function tick(){if(live&&date!==bj())selectDate(bj());if(bed.stage===1&&!left()){bed={stage:3,left:0,end:0};saveBed();go(3)}else if(!bday&&p===3&&bed.stage===1&&lastSeconds!==Math.ceil(left()/1000))timerPaint();else if(!bday&&p===1&&stamp!==clock())clockPaint(false)}
+el('day').onchange=e=>{if(e.target.value){live=false;selectDate(e.target.value)}};el('today').onclick=()=>{live=true;selectDate(bj())};el('skip').onclick=()=>{bed={stage:1,left:5000,end:Date.now()+5000};saveBed();go(3)};
+el('send').onclick=()=>{let m=el('memo').value.split('\n').map(s=>s.trim()).filter(Boolean);if(m.reduce((h,s)=>h+wrap(s,680,27).length*39+8,0)>300){el('status').textContent='超出一屏，请缩短留言。';return}put('memo/'+date,m);el('status').textContent='已保存';go(4)};
+document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SUMMARY|BUTTON/.test(e.target.tagName))return;if(['ArrowUp','ArrowDown','Enter'].includes(e.key)){e.preventDefault();if(!e.repeat)(e.key==='Enter'?action:()=>go(p+(e.key==='ArrowUp'?-1:1)))()}});
+let wheelAt=-1000;c.addEventListener('wheel',e=>{e.preventDefault();if(e.deltaY&&performance.now()-wheelAt>300){wheelAt=performance.now();go(p+Math.sign(e.deltaY))}},{passive:false});c.onclick=()=>{c.focus();action()};selectDate(date);setInterval(tick,200);
+</script></html>

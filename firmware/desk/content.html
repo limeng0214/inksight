@@ -1,0 +1,28 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>我的课桌</title>
+<style>*{box-sizing:border-box}body{max-width:800px;margin:auto;padding:20px;font:18px/1.55 system-ui;color:#151515}header,nav{display:flex;align-items:center;gap:16px;justify-content:space-between}h1{font-size:32px}h2{font-size:22px}button,summary{font:inherit;cursor:pointer}button{background:white;border:1px solid;border-radius:8px;padding:6px 16px}section{border-top:2px solid;margin-top:16px}output{font: bold 54px monospace;display:block}#hint{font-weight:bold}</style>
+<header><h1>我的课桌</h1><span id="date"></span></header>
+<section><h2>今日课程</h2><div id="school"></div><p id="extra"></p></section>
+<section><h2>睡前打卡</h2><div>① 反转拍 · 6 分钟</div><output id="clock">06:00</output><button id="toggle"></button> <button id="reset">重新计时</button><p id="hint" role="status"></p><div id="tasks"></div></section>
+<section><h2>今日阅读</h2><p id="passage"></p><b id="question"></b><details><summary>读完想一想，再看提示</summary><span id="answer"></span></details></section>
+<script>
+const school=[[],['语文','英语','数学','科学','地方课程','班会','数学'],['语文','数学','信息','体育','科学','语文','英语'],['数学','语文','道法','语文','美术','体育','数学'],['语文','数学','美术','音乐','英语','书法','语文','晚自习'],['综合实践活动','语文','英语','音乐','道法','体育','语文','晚自习'],[]];
+const extra=['','','17:30　钢琴课','19:10　THINK 在线英语课','','',''];
+const readings=[
+['雨停了。楼下的孩子把纸船放进水沟，又赶到前面的拐角，捞走卡在那里的树枝。','他为什么先跑去捞树枝？','把「前面的拐角」和纸船将要经过的路线连起来想。'],
+['爷爷的旧尺子缺了一个角。我送他一把新的。他把新尺放进工具箱，却把旧尺挂回墙上。尺子背面，刻着爸爸小时候的身高。','最后一句让你怎样重新理解爷爷的动作？','试着用「原先我以为……读到最后我发现……」说两句。'],
+['操场上风很大，接力棒掉在地上。小北捡起它时，前面的人已经跑远了。他听见身后有人喊自己的名字，便把棒子握紧了一点。','哪一个动作透露了小北心情的变化？','找出听到喊声前后手上的动作，再说说你的推测。'],
+['阿姨每天在店门口摆两只水碗。今天下雨，她只把碗往屋檐里挪了挪。傍晚，一只湿漉漉的小狗熟门熟路地钻了进来。','「熟门熟路」告诉了你文中没有直接说出的哪件事？','想想这是不是小狗第一次来，找两个依据。'],
+['山路分成两条。弟弟指着更宽的一条说，走这里。姐姐蹲下来，发现窄路边有新鲜的自行车印。送信的叔叔刚骑车上山。','如果要找送信人，你会选哪条路？证据够不够确定？','区分「更可能」和「一定」，再说出理由。'],
+['妈妈回家时，饭桌边多了一张歪歪扭扭的小凳子。弟弟一声不响地坐上去，把原来那张有靠背的椅子朝她推了推。','不用「体贴」这个词，你能说出弟弟在想什么吗？','从两张椅子的不同之处入手。'],
+['清早，我以为窗外有人敲门。推开窗，只有一根竹枝轻轻碰着玻璃。晚上再听见那声音，我忽然觉得屋里没那么静了。','同一个声音，早晚给「我」的感觉有什么变化？','找出第一次听见时的动作，再读最后一句。']];
+const $=id=>document.getElementById(id);
+let day='',s;
+function save(){localStorage.setItem('jiayi-'+day,JSON.stringify(s))}
+function tick(now=Date.now()){
+ const d=new Date(now), key=d.toLocaleDateString('sv-SE');
+ if(day!==key){day=key;s=JSON.parse(localStorage.getItem('jiayi-'+day)||'null')||{left:360,end:0,done:false,tasks:[false,false,false]};let w=d.getDay(),c=school[w];$('date').textContent=d.toLocaleDateString('zh-CN',{month:'long',day:'numeric',weekday:'long'});$('school').innerText=c.length?'上午　'+c.slice(0,4).join(' · ')+'\n下午　'+c.slice(4,7).join(' · ')+(c[7]?'\n晚上　'+c[7]:''):'今天没有校内课程';$('extra').textContent=extra[w];let r=readings[(Math.floor(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/86400000))%7];['passage','question','answer'].forEach((id,i)=>$(id).textContent=r[i]);document.querySelector('details').open=false;$('tasks').replaceChildren();['② 滴眼药水','③ 洗漱','④ 戴 OK 镜'].forEach((t,i)=>{let l=document.createElement('label'),b=document.createElement('input');b.type='checkbox';b.checked=s.tasks[i];b.onchange=()=>{s.tasks[i]=b.checked;save()};l.append(b,t);$('tasks').append(l,document.createElement('br'))})}
+ if(s.end){s.left=Math.max(0,Math.ceil((s.end-now)/1000));if(!s.left){s.end=0;s.done=true;save()}}
+ $('clock').textContent=[Math.floor(s.left/60),s.left%60].map(n=>String(n).padStart(2,'0')).join(':');$('toggle').disabled=s.done;$('toggle').textContent=s.done?'已完成':s.end?'暂停':s.left===360?'开始反转拍':'继续';$('hint').textContent=s.done?'6 分钟到了，下一项是滴眼药水。':'';
+}
+$('toggle').onclick=()=>{tick();if(s.done)return;s.end=s.end?0:Date.now()+s.left*1000;save();tick()};$('reset').onclick=()=>{s.left=360;s.end=0;s.done=false;save();tick()};tick();setInterval(tick,250);
+</script></html>
