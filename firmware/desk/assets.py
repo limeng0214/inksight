@@ -49,6 +49,9 @@ for i,p in enumerate(poems):
    d.text((380,y),t,font=font(n),fill=0)
   d.text((30,434),'SCROLL: Turn page    PRESS: '+('Read poem' if note else 'Show note'),font=font(21),fill=0)
   export('poem%d%d'%(i,note),im)
+for i,t in enumerate(['中按开始说话，再按一次发送。','正在听，请说话。中按发送。','正在等待小智回复……','小智正在回答，中按停止。','连接或音频失败，中按重试。','请在家长页面填写小智网关地址。']):
+ page('chat'+str(i),'小智智能对话',[t],'上下拨动离开对话')
+page('wake','起床上学了',['正在播放：《起床号》'],'按滚轮停止　·　最长播放 5 分钟')
 page('memoEmpty','爸妈留言',['今天没有留言。'],'家长手机连接同一 Wi-Fi，打开上方网址填写。')
 page('memoPage','爸妈留言',[],'家长手机连接同一 Wi-Fi，打开上方网址填写。')
 page('birthday','生日快乐！',['11 月 21 日','愿你一直对世界好奇。'],'上下拨动翻页')
@@ -58,6 +61,7 @@ for i,ch in enumerate('0123456789:'):
 def ptr(n,els):f.write('static const uint8_t* const '+n+'[]={'+','.join(els)+'};\n')
 ptr('schoolArt',['school'+str(i) for i in range(7)]);ptr('readArt',['read%d%d'%(i,a) for i in range(7) for a in range(2)]);ptr('bedArt',['bed'+str(i) for i in range(8)]);ptr('tomorrowArt',['tomorrow'+str(i) for i in range(7)]);ptr('poemArt',['poem%d%d'%(i,n) for i in range(2) for n in range(2)]);ptr('digits',['digit'+str(i) for i in range(11)])
 
+ptr('chatArt',['chat'+str(i) for i in range(6)])
 f.close()
 import lzma
 Path('desk/art.inc.xz').write_bytes(lzma.compress(Path('src/desk_art.inc').read_bytes()))

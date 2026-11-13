@@ -5,9 +5,10 @@
 #include <Adafruit_GFX.h>
 #include <desk_art.inc>
 #include "desk_parent.inc"
+#include "desk_sound.inc"
 
 namespace desk {
-enum Page { Schedule, Clock, Reading, Bed, Memo, PageCount };
+enum Page { Schedule, Clock, Reading, Bed, Memo, Chat, PageCount };
 Page page=Schedule;
 Preferences prefs;
 WebServer parent(80);
@@ -16,6 +17,8 @@ bool dirty=true, note=false, hint=false, birthdayCard=false;
 int offset=1, stage=0, lastSecond=-1;
 uint32_t remaining=360000, started=0;
 tm localDay{};
+bool ringing=false, pendingAlarm=false;
+int paintedPhase=-1,minuteMark=0;
 String dateKey, lastClock, lastAddress;
 constexpr int memoWidth=736, memoHeight=288, memoBytes=memoWidth*memoHeight/8;
 uint8_t timerRegion[40*104];
@@ -118,24 +121,36 @@ void setupParent(){
    else{File f=LittleFS.open("/desk.tmp","w");ok=f&&f.write(buf,n)==n&&f.print(text)==text.length();f.close();if(ok)ok=LittleFS.rename("/desk.tmp",path);}
   }
   free(buf);if(ok&&page==Memo&&d==dateKey)dirty=true;parent.send(ok?200:500);
+ });
+ parent.on("/gateway",HTTP_POST,[]{
+  IPAddress address;
+  if(!address.fromString(parent.arg("ip")) || !(address[0]==10 || (address[0]==192&&address[1]==168) || (address[0]==172&&address[1]>=16&&address[1]<=31))){parent.send(400);return;}
+  if(deskSound::busy){parent.send(409);return;}
+  deskSound::gateway="http://"+address.toString()+":8765";prefs.putString("gate",deskSound::gateway);
+  dirty=true;parent.send(200,"text/plain;charset=utf-8","已保存，返回小智页即可对话。");
  });parent.begin();
 }
 void draw(){
  int sec=stage>=3?0:(left()+999)/1000;
- if(!dirty){if(!birthdayCard&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
+ int elapsedMinutes=(360-sec)/60;
+ bool minuteFull=page==Bed&&stage==1&&elapsedMinutes>minuteMark;
+ if(minuteFull){minuteMark=elapsedMinutes;dirty=true;}
+ if(!dirty){if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
  const uint8_t *art=nullptr;
- if(birthdayCard)art=birthday;
+ if(ringing)art=wake;
+ else if(birthdayCard)art=birthday;
  else switch(page){
  case Schedule:{int w=(localDay.tm_wday+offset)%7;art=dateKey.isEmpty()?nosync:(offset==1?tomorrowArt[w]:schoolArt[w]);break;}
  case Clock:art=poemArt[(localDay.tm_yday%2)*2+note];break;
  case Reading:art=readArt[(localDay.tm_yday%7)*2+hint];break;
  case Bed:art=bedArt[stage];break;
+ case Chat:paintedPhase=deskSound::gateway.isEmpty()?5:deskSound::phase.load();art=chatArt[paintedPhase];break;
  case Memo:art=LittleFS.exists(memoPath(dateKey))?memoPage:memoEmpty;break;
  default:return;
  }
  memcpy(imgBuf,art,48000);
- if(!birthdayCard){
-  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);dateLabel(header,32,30,3);drawClock(true);}
+ if(!birthdayCard&&!ringing){
+  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);dateLabel(header,32,30,3);drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
   if(page==Bed)drawTimer(sec,true);
   if(page==Schedule&&dateKey.length()){tm d=localDay;d.tm_mday+=offset;mktime(&d);dateLabel(dateOf(d),568,41,3);}
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
@@ -144,7 +159,7 @@ void draw(){
  // 首屏全刷建立两份相同底图；一轮计时结束时全刷一次，清理累积残影。
  static bool haveBase=false;
  static int previousStage=-1;
- if(!haveBase || (page==Bed && stage==3 && previousStage!=3)){
+ if(!haveBase || minuteFull || (page==Bed && stage==3 && previousStage!=3)){
   epdDisplay(imgBuf);
   haveBase=true;
  }else epdDisplayFast(imgBuf);
@@ -152,13 +167,15 @@ void draw(){
  dirty=false;
 }
 void press(int key){
+ if(ringing){deskSound::cancel=true;pendingAlarm=false;ringing=false;dirty=true;return;}
  if(birthdayCard){birthdayCard=false;prefs.putString("birth5",dateKey);}
- else if(key!=5){page=Page((page+PageCount+(key==4?-1:1))%PageCount);offset=1;note=hint=false;}
+ else if(key!=5){if(page==Chat)deskSound::cancel=true;page=Page((page+PageCount+(key==4?-1:1))%PageCount);offset=1;note=hint=false;}
  else switch(page){
  case Schedule:offset=offset%7+1;break;
  case Clock:note=!note;break;
  case Reading:hint=!hint;break;
- case Bed:if(stage==0||stage==2){started=millis();stage=1;}else if(stage==1){remaining=left();stage=remaining?2:3;}else if(stage<7)++stage;saveStep();break;
+ case Chat:if(deskSound::phase==1)deskSound::finish=true;else if(deskSound::busy)deskSound::cancel=true;else if(deskSound::gateway.length())deskSound::start(false);break;
+ case Bed:if(stage==0||stage==2){if(stage==0)minuteMark=0;started=millis();stage=1;}else if(stage==1){remaining=left();stage=remaining?2:3;}else if(stage<7)++stage;saveStep();break;
  default:return;
  }
  dirty=true;
@@ -175,11 +192,17 @@ void begin(){
  for(int p=4;p<=6;p++)pinMode(p,INPUT_PULLUP);
  keys=xQueueCreate(12,sizeof(int));configASSERT(keys);
  xTaskCreate(collectKeys,"deskKeys",2048,nullptr,2,nullptr);
- prefs.begin("desk",false);WiFi.mode(WIFI_STA);WiFi.begin(cfgSSID.c_str(),cfgPass.c_str());
+ prefs.begin("desk",false);deskSound::gateway=prefs.getString("gate","");WiFi.mode(WIFI_STA);WiFi.begin(cfgSSID.c_str(),cfgPass.c_str());
  configTime(8*3600,0,"ntp.aliyun.com","pool.ntp.org");setupParent();
 }
 void poll(){
  calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;page=Bed;saveStep();dirty=true;}
+ if(dateKey.length()&&localDay.tm_wday>=1&&localDay.tm_wday<=5&&localDay.tm_hour==6&&localDay.tm_min==45&&prefs.getString("alarmDay","")!=dateKey){
+  prefs.putString("alarmDay",dateKey);deskSound::cancel=true;pendingAlarm=true;ringing=true;birthdayCard=false;page=Clock;dirty=true;
+ }
+ if(pendingAlarm&&!deskSound::busy){pendingAlarm=false;deskSound::start(true);}
+ else if(ringing&&!pendingAlarm&&!deskSound::busy){ringing=false;dirty=true;}
+ if(page==Chat&&paintedPhase!=(deskSound::gateway.isEmpty()?5:deskSound::phase.load()))dirty=true;
  parent.handleClient();
  if(page==Memo&&(WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline"))!=lastAddress)dirty=true;
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
