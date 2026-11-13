@@ -25,9 +25,10 @@ uint32_t remaining=360000, started=0;
 tm localDay{};
 uint32_t touched=0, rotated=0; int footMinute=-1; bool praise=false;
 bool ringing=false, pendingAlarm=false;
-int paintedPhase=-1,minuteMark=0;
+int paintedPhase=-1;
 String dateKey, lastClock, lastAddress, cloudState="Waiting";
 constexpr int memoWidth=736, memoHeight=288, memoBytes=memoWidth*memoHeight/8;
+uint8_t *previousFrame=nullptr;
 uint8_t timerRegion[40*104];
 GFXcanvas1 clockArea(320,104), dateArea(740,46);
 
@@ -74,8 +75,8 @@ void drawClock(bool full){
   for(int y=0;y<96;y++)memcpy(clockArea.getBuffer()+40*y+i*7,clockGlyphs[glyph]+y*7,7);
  }
  ascii(clockArea,text.substring(5).c_str(),3,280,55);
- if(full)blit(clockArea.getBuffer(),40,24,180,104);
- else{epdPartialDisplay(clockArea.getBuffer(),24,180,344,284);}
+ blit(clockArea.getBuffer(),40,24,180,104);
+ if(!full)epdPartialDisplay(clockArea.getBuffer(),24,180,344,284);
  lastClock=text;
 }
 void drawTimer(int sec,bool full){
@@ -94,8 +95,9 @@ void drawTimer(int sec,bool full){
  }
  int x=32+first*64;
  // Commit the whole changed span in one display cycle, including on 06:00 -> 05:59.
- if(!full)epdPartialDisplay(timerRegion,x,192,32+end*64,296);
+ if(!full&&previousFrame)memcpy(previousFrame,imgBuf,48000);
  blit(timerRegion,stride,x,192,104);
+ if(!full){if(previousFrame)epdDisplayChanges(previousFrame,imgBuf);else epdPartialDisplay(timerRegion,x,192,32+end*64,296);}
  lastSecond=sec;
 }
 // 一个文件保存原文和图像，临时文件写完再改名，避免更新中途断电造成半条留言。
@@ -184,13 +186,10 @@ void footerTime(bool full){
  char t[8]="--:--";if(dateKey.length())strftime(t,sizeof(t),"%H:%M",&localDay);
  dateArea.fillScreen(1);ascii(dateArea,t,2,0,0);
  uint8_t patch[8*16];for(int y=0;y<16;y++)memcpy(patch+8*y,dateArea.getBuffer()+93*y,8);
- if(full)blit(patch,8,720,455,16);else epdPartialDisplay(patch,720,455,784,471);footMinute=localDay.tm_min;
+ blit(patch,8,720,455,16);if(!full) epdPartialDisplay(patch,720,455,784,471);footMinute=localDay.tm_min;
 }
 void draw(){
  int sec=stage>=3?0:(left()+999)/1000;
- int elapsedMinutes=(360-sec)/60;
- bool minuteFull=page==Bed&&stage==1&&elapsedMinutes>minuteMark;
- if(minuteFull){minuteMark=elapsedMinutes;dirty=true;}
  if(!dirty){if((page!=Bed||stage>=3)&&footMinute!=localDay.tm_min){footerTime(false);if(page==Clock&&!ringing&&!birthdayCard){environmentLine();uint8_t patch[40*16];for(int y=0;y<16;y++)memcpy(patch+y*40,imgBuf+(365+y)*100+3,40);epdPartialDisplay(patch,24,365,344,381);}}if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
  const uint8_t *art=nullptr;
  if(ringing)art=wake;
@@ -204,26 +203,26 @@ void draw(){
  case Memo:art=LittleFS.exists(memoPath(dateKey))?memoPage:memoEmpty;break;
  default:return;
  }
+ if(previousFrame)memcpy(previousFrame,imgBuf,48000);
  memcpy(imgBuf,art,48000);
  if(!birthdayCard&&!ringing){
-  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);dateLabel(header,32,30,3);blit(deskLogo,28,24,118,40);environmentLine();drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
+  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);blit(deskLogo,28,24,21,40);dateLabel(header,256,30,3);environmentLine();drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
   if(page==Bed)drawTimer(sec,true);
   if(page==Schedule&&dateKey.length()){tm d=localDay;d.tm_mday+=offset;mktime(&d);dateLabel(dateOf(d),568,41,3);}
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
    lastAddress=WiFi.status()==WL_CONNECTED?cloudState:String("Offline");dateLabel("ink.h-iot.com/jiayi",480,41,2);
    for(int y=425;y<455;y++)memset(imgBuf+y*100,255,100);dateLabel(lastAddress,32,432,2);}
  }
- // 首屏全刷建立两份相同底图；一轮计时结束时全刷一次，清理累积残影。
  if(page!=Bed||stage>=3)footerTime(true);
- static bool haveBase=false;
- static int previousStage=-1;
- static bool previousTimer=false;
- bool timerVisible=page==Bed&&stage<3&&!birthdayCard&&!ringing;
- if(!haveBase || (timerVisible&&!previousTimer) || minuteFull || (page==Bed && stage==3 && previousStage!=3)){
+ static bool initialized=false;
+ static Page displayed=Clock;
+ static unsigned flips=0;
+ if(initialized&&displayed!=page)++flips;
+ if(!initialized||flips==6||!previousFrame){
   epdDisplay(imgBuf);
-  haveBase=true;
- }else epdDisplayFast(imgBuf);
- previousTimer=timerVisible;previousStage=stage;
+  initialized=true;flips=0;
+ }else epdDisplayChanges(previousFrame,imgBuf);
+ displayed=page;
  dirty=false;
 }
 void press(int key){
@@ -237,7 +236,7 @@ void press(int key){
  case Clock:note=!note;break;
  case Reading:hint=!hint;break;
  case Chat:if(deskSound::phase==1)deskSound::finish=true;else if(deskSound::busy)deskSound::cancel=true;else if(deskSound::gateway.length())deskSound::start(false);break;
- case Bed:if(stage==0||stage==2){if(stage==0)minuteMark=0;started=millis();stage=1;}else if(stage==1){remaining=left();stage=remaining?2:3;}else if(stage<7)++stage;saveStep();break;
+ case Bed:if(stage==0||stage==2){started=millis();stage=1;}else if(stage==1){remaining=left();stage=remaining?2:3;}else if(stage<7)++stage;saveStep();break;
  default:return;
  }
  dirty=true;
@@ -252,6 +251,8 @@ void collectKeys(void*){
  vTaskDelay(pdMS_TO_TICKS(10));}
 }
 void begin(){
+ previousFrame=(uint8_t*)ps_malloc(48000);
+ if(!previousFrame)previousFrame=(uint8_t*)malloc(48000);
  for(int p=4;p<=6;p++)pinMode(p,INPUT_PULLUP);
  pinMode(0,INPUT_PULLUP);Wire.begin(41,42);touched=rotated=millis();
  for(int p:{0,4,5,6})gpio_wakeup_enable((gpio_num_t)p,GPIO_INTR_LOW_LEVEL);esp_sleep_enable_gpio_wakeup();

@@ -332,6 +332,41 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
     for(i=0;i<IMAGE_COUNTER;i++)EPD_3IN97_SendData(Image[i]);
 }
 
+// Compare in 8-row strips. Write consecutive changed byte columns as one window.
+static void address397(uint8_t command, unsigned value){
+    EPD_3IN97_SendCommand(command);
+    EPD_3IN97_SendData(value & 255);
+    EPD_3IN97_SendData(value >> 8);
+}
+void epdDisplayChanges(const uint8_t *before,const uint8_t *after){
+    if(!memcmp(before,after,W*H/8))return;
+    EPD_3IN97_Reset();
+    EPD_3IN97_SendCommand(0x11); EPD_3IN97_SendData(1);
+    EPD_3IN97_SendCommand(0x18); EPD_3IN97_SendData(0x80);
+    EPD_3IN97_SendCommand(0x3C); EPD_3IN97_SendData(0x80);
+    // Stage all windows, refresh once, then synchronize the controller's old image.
+    for(int pass=0;pass<2;pass++){
+        for(int y=0;y<H;y+=8){
+            bool changed[W/8+1]={};
+            for(int row=y;row<y+8;row++)
+                for(int x=0;x<W/8;x++)changed[x]|=before[row*(W/8)+x]!=after[row*(W/8)+x];
+            for(int x=0;x<W/8;){
+                if(!changed[x]){++x;continue;}
+                int start=x;while(changed[x])++x;
+                address397(0x44,start*8);
+                EPD_3IN97_SendData((x*8-1)&255);EPD_3IN97_SendData((x*8-1)>>8);
+                address397(0x45,H-1-y);
+                EPD_3IN97_SendData((H-8-y)&255);EPD_3IN97_SendData((H-8-y)>>8);
+                address397(0x4e,start*8);address397(0x4f,H-1-y);
+                EPD_3IN97_SendCommand(pass?0x26:0x24);
+                for(int row=y;row<y+8;row++)
+                    for(int col=start;col<x;col++)EPD_3IN97_SendData(after[row*(W/8)+col]);
+            }
+        }
+        if(!pass)EPD_3IN97_TurnOnDisplay_Part();
+    }
+}
+
 // 刷新完成后让屏幕控制器休眠，墨水屏仍会保留已有画面。
 void EPD_3IN97_Sleep(void)
 {
