@@ -1059,6 +1059,13 @@ void setup() {
         return;
     }
 
+#if defined(INKSIGHT_DESK_UI)
+    // 旧版配网可能保存了其他服务器；家庭版在固定云站重新领取本机凭据。
+    if (cfgServer != "https://ink.h-iot.com") {
+        clearDeviceToken();
+        saveServerUrl("https://ink.h-iot.com");
+    }
+#endif
     if (cfgServer.length() == 0) {
         Serial.println("No server URL configured -> portal");
         enterPortalMode();

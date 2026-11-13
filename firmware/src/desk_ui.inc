@@ -26,7 +26,7 @@ tm localDay{};
 uint32_t touched=0, rotated=0; int footMinute=-1; bool praise=false;
 bool ringing=false, pendingAlarm=false;
 int paintedPhase=-1,minuteMark=0;
-String dateKey, lastClock, lastAddress;
+String dateKey, lastClock, lastAddress, cloudState="Waiting";
 constexpr int memoWidth=736, memoHeight=288, memoBytes=memoWidth*memoHeight/8;
 uint8_t timerRegion[40*104];
 GFXcanvas1 clockArea(320,104), dateArea(740,46);
@@ -112,13 +112,16 @@ void syncCloudNote(){
  if(dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||cfgServer!="https://ink.h-iot.com"||
    stage==1||deskSound::busy||ringing||(attempted&&millis()-attempted<55000))return;
  attempted=millis();
- if(cfgPendingPairCode.length()&&!connectWiFi())return;
+ // 家庭版直接读取本机留言，不要求家长绑定账号。
+ cloudState="Sync failed";
  if(!ensureDeviceToken())return;
  WiFiClientSecure tls;tls.setCACert(ROOT_CA);HTTPClient http;
  http.setConnectTimeout(2500);http.setTimeout(3000);
  if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return;
  http.addHeader("X-Device-Token",cfgDeviceToken);
  int code=http.GET(),n=http.getSize();
+ if(code==204)cloudState="Cloud OK";
+ if(code==401)clearDeviceToken();
  if(code!=200||n<memoBytes||n>memoBytes+2000){http.end();return;}
  uint8_t *buf=(uint8_t*)ps_malloc(n);
  if(buf&&http.getStream().readBytes(buf,n)==(size_t)n){
@@ -127,9 +130,10 @@ void syncCloudNote(){
   uint8_t block[256];for(int off=0;same&&off<n;off+=sizeof(block)){int k=min((int)sizeof(block),n-off);
    same=old.read(block,k)==(size_t)k&&!memcmp(buf+off,block,k);}
   old.close();
+  cloudState="Cloud OK";
   if(n==memoBytes){if(LittleFS.exists(path)&&LittleFS.remove(path)&&page==Memo)dirty=true;}
   else if(!same){File f=LittleFS.open("/cloud.tmp","w");bool ok=f&&f.write(buf,n)==(size_t)n;f.close();
-   if(ok&&LittleFS.rename("/cloud.tmp",path)&&page==Memo)dirty=true;}
+   if(ok&&LittleFS.rename("/cloud.tmp",path)){if(page==Memo)dirty=true;}else cloudState="Save failed";}
  }
  free(buf);http.end();
 }
@@ -207,7 +211,8 @@ void draw(){
   if(page==Bed)drawTimer(sec,true);
   if(page==Schedule&&dateKey.length()){tm d=localDay;d.tm_mday+=offset;mktime(&d);dateLabel(dateOf(d),568,41,3);}
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
-   lastAddress=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline");dateLabel(lastAddress,480,41,3);}
+   lastAddress=WiFi.status()==WL_CONNECTED?cloudState:String("Offline");dateLabel("ink.h-iot.com/jiayi",480,41,2);
+   for(int y=425;y<455;y++)memset(imgBuf+y*100,255,100);dateLabel(lastAddress,32,432,2);}
  }
  // 首屏全刷建立两份相同底图；一轮计时结束时全刷一次，清理累积残影。
  footerTime(true);
@@ -267,7 +272,7 @@ void poll(){
  if(engaged)touched=rotated=millis();
  else if(millis()-rotated>=300000){press(6);}
  parent.handleClient();syncCloudNote();
- if(page==Memo&&(WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline"))!=lastAddress)dirty=true;
+ if(page==Memo&&(WiFi.status()==WL_CONNECTED?cloudState:String("Offline"))!=lastAddress)dirty=true;
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
  draw();delay(5);
  // Keep the local editor reachable on its page. Sleep between minute boundaries elsewhere.
