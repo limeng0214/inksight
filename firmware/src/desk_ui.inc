@@ -95,9 +95,11 @@ void drawTimer(int sec,bool full){
  }
  int x=32+first*64;
  // Commit the whole changed span in one display cycle, including on 06:00 -> 05:59.
- if(!full&&previousFrame)memcpy(previousFrame,imgBuf,48000);
+ bool minuteChanged=!full&&lastSecond>=0&&sec/60!=lastSecond/60;
  blit(timerRegion,stride,x,192,104);
- if(!full){if(previousFrame)epdDisplayChanges(previousFrame,imgBuf);else epdPartialDisplay(timerRegion,x,192,32+end*64,296);}
+ // 分钟借位时重新建立完整底图；平时只发连续的秒数字窗口。
+ if(minuteChanged)epdDisplay(imgBuf);
+ else if(!full)epdPartialDisplay(timerRegion,x,192,32+end*64,296);
  lastSecond=sec;
 }
 // 一个文件保存原文和图像，临时文件写完再改名，避免更新中途断电造成半条留言。
@@ -114,18 +116,31 @@ void syncCloudNote(){
    stage==1||deskSound::busy||ringing||(attempted&&millis()-attempted<55000))return;
  attempted=millis();
  // 家庭版直接读取本机留言，不要求家长绑定账号。
- cloudState="Sync failed";
+ cloudState="Token failed";
  if(!ensureDeviceToken())return;
  WiFiClientSecure tls;tls.setCACert(ROOT_CA);HTTPClient http;
- http.setConnectTimeout(2500);http.setTimeout(3000);
+ http.setConnectTimeout(8000);http.setTimeout(8000);
+ cloudState="Connect failed";
  if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return;
  http.addHeader("X-Device-Token",cfgDeviceToken);
  int code=http.GET(),n=http.getSize();
+ cloudState=code<0?String("Network ")+code:String("HTTP ")+code;
+ if(code==200)cloudState="Format error";
  if(code==204)cloudState="Cloud OK";
  if(code==401)clearDeviceToken();
  if(code!=200||n<memoBytes||n>memoBytes+2000){http.end();return;}
  uint8_t *buf=(uint8_t*)ps_malloc(n);
- if(buf&&http.getStream().readBytes(buf,n)==(size_t)n){
+ if(!buf){cloudState="Memory low";http.end();return;}
+ // TLS can split the bitmap across records. Wait for each available block.
+ int received=0;uint32_t progress=millis(),begin=progress;
+ while(received<n && millis()-progress<8000 && millis()-begin<20000){
+  int available=tls.available();
+  if(available>0){int got=tls.read(buf+received,min(available,n-received));if(got>0){received+=got;progress=millis();continue;}}
+  if(!http.connected())break;
+  delay(2);
+ }
+ cloudState="Download cut";
+ if(received==n){
   String path=memoPath(dateKey);File old=LittleFS.open(path,"r");
   bool same=old&&old.size()==(size_t)n;
   uint8_t block[256];for(int off=0;same&&off<n;off+=sizeof(block)){int k=min((int)sizeof(block),n-off);
@@ -217,7 +232,8 @@ void draw(){
  // 页面切换（包括生日卡和闹铃）先整屏清理。同一页的数据变化仍用局刷。
  const int view=ringing?PageCount+1:birthdayCard?PageCount:int(page);
  static int displayedView=-1;
- if(displayedView!=view||!previousFrame)epdDisplay(imgBuf);
+ if(displayedView<0)epdDisplay(imgBuf);
+ else if(displayedView!=view||!previousFrame)epdDisplayFast(imgBuf);
  else epdDisplayChanges(previousFrame,imgBuf);
  displayedView=view;
  dirty=false;
