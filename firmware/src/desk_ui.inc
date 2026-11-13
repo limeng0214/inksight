@@ -214,15 +214,12 @@ void draw(){
    for(int y=425;y<455;y++)memset(imgBuf+y*100,255,100);dateLabel(lastAddress,32,432,2);}
  }
  if(page!=Bed||stage>=3)footerTime(true);
- static bool initialized=false;
- static Page displayed=Clock;
- static unsigned flips=0;
- if(initialized&&displayed!=page)++flips;
- if(!initialized||flips==6||!previousFrame){
-  epdDisplay(imgBuf);
-  initialized=true;flips=0;
- }else epdDisplayChanges(previousFrame,imgBuf);
- displayed=page;
+ // 页面切换（包括生日卡和闹铃）先整屏清理。同一页的数据变化仍用局刷。
+ const int view=ringing?PageCount+1:birthdayCard?PageCount:int(page);
+ static int displayedView=-1;
+ if(displayedView!=view||!previousFrame)epdDisplay(imgBuf);
+ else epdDisplayChanges(previousFrame,imgBuf);
+ displayedView=view;
  dirty=false;
 }
 void press(int key){
@@ -278,13 +275,16 @@ void poll(){
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
  draw();delay(5);
  // Keep the local editor reachable on its page. Sleep between minute boundaries elsewhere.
- if(!engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=10000 && WiFi.status()==WL_CONNECTED){
+ // 已校时后即使家庭网络短暂断开，也按分钟唤醒；预留重连时间。
+ static uint32_t wifiStarted=0;
+ bool networkReady=WiFi.status()==WL_CONNECTED || millis()-wifiStarted>=10000;
+ if(!engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=10000 && networkReady && !uxQueueMessagesWaiting(keys)){
   timeval tv;gettimeofday(&tv,nullptr);int64_t us=60000000LL-(tv.tv_sec%60)*1000000LL-tv.tv_usec;
   us=min(us,(int64_t)max(1L,300000L-(long)(millis()-rotated))*1000);
   if(esp_wifi_stop()!=ESP_OK)return;
-  esp_sleep_enable_timer_wakeup(us);esp_light_sleep_start();
+  if(esp_sleep_enable_timer_wakeup(us)==ESP_OK)esp_light_sleep_start();
   if(esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_GPIO)touched=millis();
-  esp_wifi_start();WiFi.reconnect();delay(40);
+  esp_wifi_start();WiFi.reconnect();wifiStarted=millis();delay(40);
  }
 }
 }
