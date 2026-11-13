@@ -15,3 +15,7 @@
 在 firmware 目录运行 `pio run -e jiayi_397_s3`。刷机可用 `pio run -e jiayi_397_s3 -t upload`；构建生成的完整文件 `firmware_merged.bin` 从地址 0x0 烧录。通用 InkSight 配置为 `epd_397_waveshare_s3`。
 
 [规格演示](demo.html) 可下载后打开。演示的家长后台保存在浏览器内，实物使用上面的局域网编辑页。
+
+烧录前已按[一体板原理图](https://www.waveshare.net/w/upload/a/ad/ESP32-S3_e-Paper-3.97-schematic.pdf)和[微雪示例](https://github.com/waveshareteam/ESP32-S3-ePaper-3.97)核对。屏幕 GPIO 按 SCK、DIN、CS、DC、RST、BUSY 顺序为 11、12、10、9、46、3，BUSY 高表示忙。拨轮上、中、下分别为 GPIO4、5、6，低有效。USB 烧录用 BOOT，不用 PWR 代替复位。
+
+倒计时的单个数字占 64 × 104 像素，通常每秒局刷 832 字节，跨位时更新包含变化数字的矩形。首次进入桌面整屏建立底图，计时结束进入清单时整屏清理。逻辑使用单调时钟，刷新较慢时显示实际剩余时间。实物的对齐、残影和刷新耗时需上板观察。

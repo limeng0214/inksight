@@ -70,8 +70,21 @@ void drawClock(bool full){
 }
 void drawTimer(int sec,bool full){
  int codes[]={sec/600,sec/60%10,10,sec%60/10,sec%10};
- for(int y=0;y<104;y++)for(int i=0;i<5;i++)memcpy(timerRegion+y*40+i*8,digits[codes[i]]+y*8,8);
- if(full)blit(timerRegion,40,32,192,104);else epdPartialDisplay(timerRegion,32,192,352,296);
+ // 每个字形 64 × 104；通常只传秒个位，跨分钟时合并变化的数字。
+ int first=0, end=5;
+ if(!full && lastSecond>=0){
+  int old[]={lastSecond/600,lastSecond/60%10,10,lastSecond%60/10,lastSecond%10};
+  while(first<end && codes[first]==old[first])++first;
+  while(end>first && codes[end-1]==old[end-1])--end;
+  if(first==end)return;
+ }
+ int stride=(end-first)*8;
+ for(int y=0;y<104;y++)for(int i=first;i<end;i++){
+  memcpy(timerRegion+y*stride+(i-first)*8,digits[codes[i]]+y*8,8);
+ }
+ int x=32+first*64;
+ if(full)blit(timerRegion,stride,x,192,104);
+ else epdPartialDisplay(timerRegion,x,192,32+end*64,296);
  lastSecond=sec;
 }
 // 一个文件保存原文和图像，临时文件写完再改名，避免更新中途断电造成半条留言。
@@ -128,7 +141,15 @@ void draw(){
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
    lastAddress=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline");dateLabel(lastAddress,480,41,3);}
  }
- epdDisplayFast(imgBuf);dirty=false;
+ // 首屏全刷建立两份相同底图；一轮计时结束时全刷一次，清理累积残影。
+ static bool haveBase=false;
+ static int previousStage=-1;
+ if(!haveBase || (page==Bed && stage==3 && previousStage!=3)){
+  epdDisplay(imgBuf);
+  haveBase=true;
+ }else epdDisplayFast(imgBuf);
+ previousStage=stage;
+ dirty=false;
 }
 void press(int key){
  if(birthdayCard){birthdayCard=false;prefs.putString("birth5",dateKey);}
