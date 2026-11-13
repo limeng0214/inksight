@@ -321,6 +321,15 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
 	}
 
 	EPD_3IN97_TurnOnDisplay_Part();
+    // Save the visible rectangle as the previous image for the next differential refresh.
+    EPD_3IN97_SendCommand(0x4E);
+    EPD_3IN97_SendData((Xstart*8)&255);
+    EPD_3IN97_SendData((Xstart*8)>>8);
+    EPD_3IN97_SendCommand(0x4F);
+    EPD_3IN97_SendData(Ystart&255);
+    EPD_3IN97_SendData(Ystart>>8);
+    EPD_3IN97_SendCommand(0x26);
+    for(i=0;i<IMAGE_COUNTER;i++)EPD_3IN97_SendData(Image[i]);
 }
 
 // 刷新完成后让屏幕控制器休眠，墨水屏仍会保留已有画面。

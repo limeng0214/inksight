@@ -93,10 +93,9 @@ void drawTimer(int sec,bool full){
   memcpy(timerRegion+y*stride+(i-first)*8,digits[codes[i]]+y*8,8);
  }
  int x=32+first*64;
- if(!full && first<2 && end>3){ // The colon never changes.
-  for(int i=first;i<end;i++){if(i!=2)epdPartialDisplay((uint8_t*)digits[codes[i]],32+64*i,192,96+64*i,296);}
- }else if(full)blit(timerRegion,stride,x,192,104);
- else epdPartialDisplay(timerRegion,x,192,32+end*64,296);
+ // Commit the whole changed span in one display cycle, including on 06:00 -> 05:59.
+ if(!full)epdPartialDisplay(timerRegion,x,192,32+end*64,296);
+ blit(timerRegion,stride,x,192,104);
  lastSecond=sec;
 }
 // 一个文件保存原文和图像，临时文件写完再改名，避免更新中途断电造成半条留言。
@@ -192,7 +191,7 @@ void draw(){
  int elapsedMinutes=(360-sec)/60;
  bool minuteFull=page==Bed&&stage==1&&elapsedMinutes>minuteMark;
  if(minuteFull){minuteMark=elapsedMinutes;dirty=true;}
- if(!dirty){if(footMinute!=localDay.tm_min){footerTime(false);if(page==Clock&&!ringing&&!birthdayCard){environmentLine();uint8_t patch[40*16];for(int y=0;y<16;y++)memcpy(patch+y*40,imgBuf+(365+y)*100+3,40);epdPartialDisplay(patch,24,365,344,381);}}if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
+ if(!dirty){if((page!=Bed||stage>=3)&&footMinute!=localDay.tm_min){footerTime(false);if(page==Clock&&!ringing&&!birthdayCard){environmentLine();uint8_t patch[40*16];for(int y=0;y<16;y++)memcpy(patch+y*40,imgBuf+(365+y)*100+3,40);epdPartialDisplay(patch,24,365,344,381);}}if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
  const uint8_t *art=nullptr;
  if(ringing)art=wake;
  else if(birthdayCard)art=birthday;
@@ -215,14 +214,16 @@ void draw(){
    for(int y=425;y<455;y++)memset(imgBuf+y*100,255,100);dateLabel(lastAddress,32,432,2);}
  }
  // 首屏全刷建立两份相同底图；一轮计时结束时全刷一次，清理累积残影。
- footerTime(true);
+ if(page!=Bed||stage>=3)footerTime(true);
  static bool haveBase=false;
  static int previousStage=-1;
- if(!haveBase || minuteFull || (page==Bed && stage==3 && previousStage!=3)){
+ static bool previousTimer=false;
+ bool timerVisible=page==Bed&&stage<3&&!birthdayCard&&!ringing;
+ if(!haveBase || (timerVisible&&!previousTimer) || minuteFull || (page==Bed && stage==3 && previousStage!=3)){
   epdDisplay(imgBuf);
   haveBase=true;
  }else epdDisplayFast(imgBuf);
- previousStage=stage;
+ previousTimer=timerVisible;previousStage=stage;
  dirty=false;
 }
 void press(int key){
