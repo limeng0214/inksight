@@ -152,8 +152,8 @@ void EPD_3IN97_Init(void)
 	EPD_3IN97_SendData(0x00);
 	EPD_3IN97_SendData(0x00);
 	EPD_3IN97_SendCommand(0x4F);   // set RAM y address count to 0X199;    
-	EPD_3IN97_SendData(0x00);
-	EPD_3IN97_SendData(0x00);
+	EPD_3IN97_SendData((H-1)&255);
+    EPD_3IN97_SendData((H-1)>>8);
     EPD_3IN97_ReadBusy();
 
 }
@@ -198,8 +198,8 @@ void EPD_3IN97_Init_Fast(void)
 	EPD_3IN97_SendData(0x00);
 	EPD_3IN97_SendData(0x00);
 	EPD_3IN97_SendCommand(0x4F);   // set RAM y address count to 0X199;    
-	EPD_3IN97_SendData(0x00);
-	EPD_3IN97_SendData(0x00);
+	EPD_3IN97_SendData((H-1)&255);
+    EPD_3IN97_SendData((H-1)>>8);
     EPD_3IN97_ReadBusy();
 
 	EPD_3IN97_SendCommand(0x3C); //BorderWavefrom
@@ -284,7 +284,10 @@ void EPD_3IN97_Display_Partial(const UBYTE *Image, UWORD Xstart, UWORD Ystart, U
     Xend -= 1;
 	Yend -= 1;	
 
+    // Match the full frame: horizontal bytes ascend, controller rows descend.
+    Ystart = H-1-Ystart; Yend = H-1-Yend;
     EPD_3IN97_Reset();
+    EPD_3IN97_SendCommand(0x11); EPD_3IN97_SendData(0x01);
 
     EPD_3IN97_SendCommand(0x18);
     EPD_3IN97_SendData(0x80);

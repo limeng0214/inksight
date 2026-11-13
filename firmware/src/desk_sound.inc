@@ -59,8 +59,8 @@ void chat(){
  }else phase=cancel?0:4;
  http.end();
 }
-void worker(void *arg){if(ready()){if(arg)bugle();else chat();}else phase=4;
+void worker(void *arg){if(ready()){if(arg==(void*)2){digitalWrite(39,HIGH);for(size_t i=0;i<sizeof(praisePCM)&&!cancel;i+=640)bus.write(praisePCM+i,min(size_t(640),sizeof(praisePCM)-i));}else if(arg)bugle();else chat();}else phase=4;
  digitalWrite(39,LOW);busy=false;vTaskDelete(nullptr);}
-bool start(bool alarm){if(busy.exchange(true))return false;cancel=false;finish=false;phase=0;
- if(xTaskCreate(worker,"deskAudio",8192,alarm?(void*)1:nullptr,2,nullptr)!=pdPASS){busy=false;phase=4;return false;}return true;}
+bool start(int kind){if(busy.exchange(true))return false;cancel=false;finish=false;phase=0;
+ if(xTaskCreate(worker,"deskAudio",8192,(void*)(intptr_t)kind,2,nullptr)!=pdPASS){busy=false;phase=4;return false;}return true;}
 }

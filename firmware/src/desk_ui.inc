@@ -5,11 +5,15 @@
 #include <Adafruit_GFX.h>
 #include <desk_art.inc>
 #include "desk_parent.inc"
+#include <desk_custom.inc>
 #include "desk_sound.inc"
+#include <esp_sleep.h>
+#include <esp_wifi.h>
+#include <driver/gpio.h>
 
 namespace desk {
 enum Page { Schedule, Clock, Reading, Bed, Memo, Chat, PageCount };
-Page page=Schedule;
+Page page=Clock;
 Preferences prefs;
 WebServer parent(80);
 QueueHandle_t keys;
@@ -17,6 +21,7 @@ bool dirty=true, note=false, hint=false, birthdayCard=false;
 int offset=1, stage=0, lastSecond=-1;
 uint32_t remaining=360000, started=0;
 tm localDay{};
+uint32_t touched=0, rotated=0; int footMinute=-1; bool praise=false;
 bool ringing=false, pendingAlarm=false;
 int paintedPhase=-1,minuteMark=0;
 String dateKey, lastClock, lastAddress;
@@ -60,15 +65,15 @@ void dateLabel(String text,int x,int y,int size){
 void drawClock(bool full){
  char value[12]="--:--";if(dateKey.length())snprintf(value,sizeof(value),"%2d:%02d%s",localDay.tm_hour%12?localDay.tm_hour%12:12,localDay.tm_min,localDay.tm_hour<12?"AM":"PM");
  String text=value;if(!full&&text==lastClock)return;
- clockArea.fillScreen(1);ascii(clockArea,text.substring(0,5).c_str(),8,0,18);ascii(clockArea,text.substring(5).c_str(),3,245,52);
- if(full)blit(clockArea.getBuffer(),40,24,180,104);
- else {
-  int first=0;while(first<5&&text[first]==lastClock[first])first++;
-  int end=5;while(end>first&&text[end-1]==lastClock[end-1])end--;
-  int x=first*48,stop=end*48;if(text.substring(5)!=lastClock.substring(5))stop=288;
-  int bytes=(stop-x)/8;
-  if(bytes>0){for(int y=0;y<104;y++)memcpy(timerRegion+y*bytes,clockArea.getBuffer()+40*y+x/8,bytes);epdPartialDisplay(timerRegion,24+x,180,24+stop,284);}
+ // Fixed 56-pixel cells keep the colon and minutes on a single baseline.
+ clockArea.fillScreen(1);
+ for(int i=0;i<5;i++){char c=text[i];if(c=='-')continue;
+  int glyph=c==':'?10:c==' '?11:c-'0';
+  for(int y=0;y<96;y++)memcpy(clockArea.getBuffer()+40*y+i*7,clockGlyphs[glyph]+y*7,7);
  }
+ ascii(clockArea,text.substring(5).c_str(),3,280,55);
+ if(full)blit(clockArea.getBuffer(),40,24,180,104);
+ else{epdPartialDisplay(clockArea.getBuffer(),24,180,344,284);}
  lastClock=text;
 }
 void drawTimer(int sec,bool full){
@@ -86,7 +91,9 @@ void drawTimer(int sec,bool full){
   memcpy(timerRegion+y*stride+(i-first)*8,digits[codes[i]]+y*8,8);
  }
  int x=32+first*64;
- if(full)blit(timerRegion,stride,x,192,104);
+ if(!full && first<2 && end>3){ // The colon never changes.
+  for(int i=first;i<end;i++){if(i!=2)epdPartialDisplay((uint8_t*)digits[codes[i]],32+64*i,192,96+64*i,296);}
+ }else if(full)blit(timerRegion,stride,x,192,104);
  else epdPartialDisplay(timerRegion,x,192,32+end*64,296);
  lastSecond=sec;
 }
@@ -130,12 +137,29 @@ void setupParent(){
   dirty=true;parent.send(200,"text/plain;charset=utf-8","已保存，返回小智页即可对话。");
  });parent.begin();
 }
+int reg8(uint8_t reg){
+ Wire.beginTransmission(0x34);Wire.write(reg);if(Wire.endTransmission(false)||Wire.requestFrom(uint8_t(0x34),uint8_t(1))!=1)return -1;return Wire.read();
+}
+bool shtCommand(uint16_t command){Wire.beginTransmission(0x70);Wire.write(command>>8);Wire.write(command&255);return Wire.endTransmission()==0;}
+bool checked(const uint8_t *p){uint8_t c=255;for(int i=0;i<2;i++){c^=p[i];for(int j=0;j<8;j++)c=c&128?(c<<1)^0x31:c<<1;}return c==p[2];}
+void environmentLine(){
+ char info[64],battery[16]="BAT --",ambient[24]="-- C   --% RH";
+ int status=reg8(0);if(status>=0){if(status&8){int pct=reg8(0xa4);if(pct>=0&&pct<=100)snprintf(battery,sizeof(battery),"BAT %d%%",pct);}else strcpy(battery,"NO BAT");}
+ if(shtCommand(0x3517)){delay(2);if(shtCommand(0x7866)){delay(14);if(Wire.requestFrom(uint8_t(0x70),uint8_t(6))==6){uint8_t v[6];Wire.readBytes(v,6);if(checked(v)&&checked(v+3))snprintf(ambient,sizeof(ambient),"%.1f C   %.0f%% RH",-45+175.*((v[0]<<8)|v[1])/65536,100.*((v[3]<<8)|v[4])/65536);}}shtCommand(0xb098);}
+ snprintf(info,sizeof(info),"%s   %s",battery,ambient);dateLabel(info,24,365,2);
+}
+void footerTime(bool full){
+ char t[8]="--:--";if(dateKey.length())strftime(t,sizeof(t),"%H:%M",&localDay);
+ dateArea.fillScreen(1);ascii(dateArea,t,2,0,0);
+ uint8_t patch[8*16];for(int y=0;y<16;y++)memcpy(patch+8*y,dateArea.getBuffer()+93*y,8);
+ if(full)blit(patch,8,720,455,16);else epdPartialDisplay(patch,720,455,784,471);footMinute=localDay.tm_min;
+}
 void draw(){
  int sec=stage>=3?0:(left()+999)/1000;
  int elapsedMinutes=(360-sec)/60;
  bool minuteFull=page==Bed&&stage==1&&elapsedMinutes>minuteMark;
  if(minuteFull){minuteMark=elapsedMinutes;dirty=true;}
- if(!dirty){if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
+ if(!dirty){if(footMinute!=localDay.tm_min){footerTime(false);if(page==Clock&&!ringing&&!birthdayCard){environmentLine();uint8_t patch[40*16];for(int y=0;y<16;y++)memcpy(patch+y*40,imgBuf+(365+y)*100+3,40);epdPartialDisplay(patch,24,365,344,381);}}if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
  const uint8_t *art=nullptr;
  if(ringing)art=wake;
  else if(birthdayCard)art=birthday;
@@ -150,13 +174,14 @@ void draw(){
  }
  memcpy(imgBuf,art,48000);
  if(!birthdayCard&&!ringing){
-  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);dateLabel(header,32,30,3);drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
+  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);dateLabel(header,32,30,3);blit(deskLogo,28,24,118,40);environmentLine();drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
   if(page==Bed)drawTimer(sec,true);
   if(page==Schedule&&dateKey.length()){tm d=localDay;d.tm_mday+=offset;mktime(&d);dateLabel(dateOf(d),568,41,3);}
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
    lastAddress=WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline");dateLabel(lastAddress,480,41,3);}
  }
  // 首屏全刷建立两份相同底图；一轮计时结束时全刷一次，清理累积残影。
+ footerTime(true);
  static bool haveBase=false;
  static int previousStage=-1;
  if(!haveBase || minuteFull || (page==Bed && stage==3 && previousStage!=3)){
@@ -167,6 +192,8 @@ void draw(){
  dirty=false;
 }
 void press(int key){
+ touched=rotated=millis();
+ if(key==0){deskSound::cancel=true;pendingAlarm=ringing=false;birthdayCard=false;page=Clock;dirty=true;return;}
  if(ringing){deskSound::cancel=true;pendingAlarm=false;ringing=false;dirty=true;return;}
  if(birthdayCard){birthdayCard=false;prefs.putString("birth5",dateKey);}
  else if(key!=5){if(page==Chat)deskSound::cancel=true;page=Page((page+PageCount+(key==4?-1:1))%PageCount);offset=1;note=hint=false;}
@@ -184,28 +211,44 @@ void press(int key){
 void collectKeys(void*){
  int sample=-1,stable=-1;uint32_t changed=0;
  for(;;){int k=-1;for(int p=4;p<=6;p++)if(digitalRead(p)==LOW){k=p;break;}
+ if(digitalRead(0)==LOW)k=0;
  if(k!=sample){sample=k;changed=millis();}
  if(sample!=stable&&millis()-changed>=30){stable=sample;if(k>=0)xQueueSend(keys,&k,0);}
  vTaskDelay(pdMS_TO_TICKS(10));}
 }
 void begin(){
  for(int p=4;p<=6;p++)pinMode(p,INPUT_PULLUP);
+ pinMode(0,INPUT_PULLUP);Wire.begin(41,42);touched=rotated=millis();
+ for(int p:{0,4,5,6})gpio_wakeup_enable((gpio_num_t)p,GPIO_INTR_LOW_LEVEL);esp_sleep_enable_gpio_wakeup();
  keys=xQueueCreate(12,sizeof(int));configASSERT(keys);
  xTaskCreate(collectKeys,"deskKeys",2048,nullptr,2,nullptr);
  prefs.begin("desk",false);deskSound::gateway=prefs.getString("gate","");WiFi.mode(WIFI_STA);WiFi.begin(cfgSSID.c_str(),cfgPass.c_str());
  configTime(8*3600,0,"ntp.aliyun.com","pool.ntp.org");setupParent();
 }
 void poll(){
- calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;page=Bed;saveStep();dirty=true;}
+ calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;praise=true;rotated=touched=millis();page=Bed;saveStep();dirty=true;}
  if(dateKey.length()&&localDay.tm_wday>=1&&localDay.tm_wday<=5&&localDay.tm_hour==6&&localDay.tm_min==45&&prefs.getString("alarmDay","")!=dateKey){
   prefs.putString("alarmDay",dateKey);deskSound::cancel=true;pendingAlarm=true;ringing=true;birthdayCard=false;page=Clock;dirty=true;
  }
  if(pendingAlarm&&!deskSound::busy){pendingAlarm=false;deskSound::start(true);}
  else if(ringing&&!pendingAlarm&&!deskSound::busy){ringing=false;dirty=true;}
- if(page==Chat&&paintedPhase!=(deskSound::gateway.isEmpty()?5:deskSound::phase.load()))dirty=true;
+ if(!birthdayCard&&!ringing&&page==Chat&&paintedPhase!=(deskSound::gateway.isEmpty()?5:deskSound::phase.load()))dirty=true;
+ if(praise&&!pendingAlarm&&!ringing&&!deskSound::busy){praise=!deskSound::start(2);}
+ bool engaged=stage==1||deskSound::busy||ringing||birthdayCard;
+ if(engaged)touched=rotated=millis();
+ else if(millis()-rotated>=300000){press(6);}
  parent.handleClient();
  if(page==Memo&&(WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline"))!=lastAddress)dirty=true;
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
  draw();delay(5);
+ // Keep the local editor reachable on its page. Sleep between minute boundaries elsewhere.
+ if(!engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=10000 && WiFi.status()==WL_CONNECTED){
+  timeval tv;gettimeofday(&tv,nullptr);int64_t us=60000000LL-(tv.tv_sec%60)*1000000LL-tv.tv_usec;
+  us=min(us,(int64_t)max(1L,300000L-(long)(millis()-rotated))*1000);
+  if(esp_wifi_stop()!=ESP_OK)return;
+  esp_sleep_enable_timer_wakeup(us);esp_light_sleep_start();
+  if(esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_GPIO)touched=millis();
+  esp_wifi_start();WiFi.reconnect();delay(40);
+ }
 }
 }

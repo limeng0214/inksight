@@ -3,11 +3,12 @@ Import("env")
 from pathlib import Path
 import lzma
 
-source = Path(env.subst("$PROJECT_DIR")) / "desk" / "art.inc.xz"
 folder = Path(env.subst("$BUILD_DIR")) / "desk_assets"
 folder.mkdir(parents=True, exist_ok=True)
-target = folder / "desk_art.inc"
-data = lzma.decompress(source.read_bytes())
-if not target.exists() or target.read_bytes() != data:
-    target.write_bytes(data)
+for name, target_name in [("art", "desk_art"), ("custom", "desk_custom")]:
+    source = Path(env.subst("$PROJECT_DIR")) / "desk" / (name + ".inc.xz")
+    target = folder / (target_name + ".inc")
+    data = lzma.decompress(source.read_bytes())
+    if not target.exists() or target.read_bytes() != data:
+        target.write_bytes(data)
 env.Append(CPPPATH=[str(folder)])
