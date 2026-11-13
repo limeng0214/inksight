@@ -4,6 +4,7 @@
 #include <mbedtls/base64.h>
 #include <Adafruit_GFX.h>
 #include <desk_art.inc>
+#include "desk_chat_art.inc"
 #include "desk_parent.inc"
 #include "certs.h"
 #include <WiFiClientSecure.h>
@@ -26,6 +27,9 @@ tm localDay{};
 uint32_t touched=0, rotated=0; int footMinute=-1; bool praise=false;
 bool ringing=false, pendingAlarm=false;
 int paintedPhase=-1;
+bool forceClean=false, memoChanged=false, retryMemo=true;
+float roomTemp=NAN;
+char environmentText[64]="BAT --   -- C   --% RH";
 String dateKey, lastClock, lastAddress, cloudState="Waiting";
 constexpr int memoWidth=736, memoHeight=288, memoBytes=memoWidth*memoHeight/8;
 uint8_t *previousFrame=nullptr;
@@ -49,7 +53,8 @@ void calendar(){
  tm d;localtime_r(&now,&d);localDay=d;String today=dateOf(d);
  if(today==dateKey)return;
  bool first=dateKey.isEmpty();dateKey=today;offset=1;hint=note=false;
- if(!first||stage!=1){remaining=360000;stage=prefs.getString("date5","")==today?prefs.getUChar("stage5",0):0;}
+ if(!first)forceClean=true;
+ if(stage!=1){remaining=360000;stage=prefs.getString("date5","")==today?prefs.getUChar("stage5",0):0;}
  if(stage>7)stage=0;
  birthdayCard=d.tm_mon==10&&d.tm_mday==21&&prefs.getString("birth5","")!=today;
  dirty=true;
@@ -95,11 +100,8 @@ void drawTimer(int sec,bool full){
  }
  int x=32+first*64;
  // Commit the whole changed span in one display cycle, including on 06:00 -> 05:59.
- bool minuteChanged=!full&&lastSecond>=0&&sec/60!=lastSecond/60;
  blit(timerRegion,stride,x,192,104);
- // 分钟借位时重新建立完整底图；平时只发连续的秒数字窗口。
- if(minuteChanged)epdDisplay(imgBuf);
- else if(!full)epdPartialDisplay(timerRegion,x,192,32+end*64,296);
+ if(!full)epdPartialDisplay(timerRegion,x,192,32+end*64,296);
  lastSecond=sec;
 }
 // 一个文件保存原文和图像，临时文件写完再改名，避免更新中途断电造成半条留言。
@@ -113,8 +115,8 @@ bool validDate(const String &s){
 void syncCloudNote(){
  static uint32_t attempted=0;
  if(dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||cfgServer!="https://ink.h-iot.com"||
-   stage==1||deskSound::busy||ringing||(attempted&&millis()-attempted<55000))return;
- attempted=millis();
+   stage==1||deskSound::busy||ringing||(!retryMemo&&attempted&&millis()-attempted<55000))return;
+ attempted=millis();retryMemo=false;
  // 家庭版直接读取本机留言，不要求家长绑定账号。
  cloudState="Token failed";
  if(!ensureDeviceToken())return;
@@ -124,12 +126,14 @@ void syncCloudNote(){
  if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return;
  http.addHeader("X-Device-Token",cfgDeviceToken);
  int code=http.GET(),n=http.getSize();
+ Serial.printf("[desk-note] %s HTTP %d, bytes %d\n",dateKey.c_str(),code,n);
+ if(code<0){char msg[160]={};int err=tls.lastError(msg,sizeof(msg));Serial.printf("[desk-note] TLS %d %s\n",err,msg);}
  cloudState=code<0?String("Network ")+code:String("HTTP ")+code;
  if(code==200)cloudState="Format error";
- if(code==204)cloudState="Cloud OK";
+ if(code==204)cloudState="No cloud note";
  if(code==401)clearDeviceToken();
  if(code!=200||n<memoBytes||n>memoBytes+2000){http.end();return;}
- uint8_t *buf=(uint8_t*)ps_malloc(n);
+ uint8_t *buf=(uint8_t*)ps_malloc(n);if(!buf)buf=(uint8_t*)malloc(n);
  if(!buf){cloudState="Memory low";http.end();return;}
  // TLS can split the bitmap across records. Wait for each available block.
  int received=0;uint32_t progress=millis(),begin=progress;
@@ -149,8 +153,9 @@ void syncCloudNote(){
   cloudState="Cloud OK";
   if(n==memoBytes){if(LittleFS.exists(path)&&LittleFS.remove(path)&&page==Memo)dirty=true;}
   else if(!same){File f=LittleFS.open("/cloud.tmp","w");bool ok=f&&f.write(buf,n)==(size_t)n;f.close();
-   if(ok&&LittleFS.rename("/cloud.tmp",path)){if(page==Memo)dirty=true;}else cloudState="Save failed";}
+   if(ok&&LittleFS.rename("/cloud.tmp",path)){memoChanged=true;if(page==Memo)dirty=true;}else cloudState="Save failed";}
  }
+ Serial.printf("[desk-note] received %d/%d, %s\n",received,n,cloudState.c_str());
  free(buf);http.end();
 }
 void setupParent(){
@@ -191,11 +196,11 @@ int reg8(uint8_t reg){
 }
 bool shtCommand(uint16_t command){Wire.beginTransmission(0x70);Wire.write(command>>8);Wire.write(command&255);return Wire.endTransmission()==0;}
 bool checked(const uint8_t *p){uint8_t c=255;for(int i=0;i<2;i++){c^=p[i];for(int j=0;j<8;j++)c=c&128?(c<<1)^0x31:c<<1;}return c==p[2];}
-void environmentLine(){
+void sampleEnvironment(){
  char info[64],battery[16]="BAT --",ambient[24]="-- C   --% RH";
  int status=reg8(0);if(status>=0){if(status&8){int pct=reg8(0xa4);if(pct>=0&&pct<=100)snprintf(battery,sizeof(battery),"BAT %d%%",pct);}else strcpy(battery,"NO BAT");}
- if(shtCommand(0x3517)){delay(2);if(shtCommand(0x7866)){delay(14);if(Wire.requestFrom(uint8_t(0x70),uint8_t(6))==6){uint8_t v[6];Wire.readBytes(v,6);if(checked(v)&&checked(v+3))snprintf(ambient,sizeof(ambient),"%.1f C   %.0f%% RH",-45+175.*((v[0]<<8)|v[1])/65536,100.*((v[3]<<8)|v[4])/65536);}}shtCommand(0xb098);}
- snprintf(info,sizeof(info),"%s   %s",battery,ambient);dateLabel(info,24,365,2);
+ if(shtCommand(0x3517)){delay(2);if(shtCommand(0x7866)){delay(14);if(Wire.requestFrom(uint8_t(0x70),uint8_t(6))==6){uint8_t v[6];Wire.readBytes(v,6);if(checked(v)&&checked(v+3)){roomTemp=-45+175.*((v[0]<<8)|v[1])/65536;snprintf(ambient,sizeof(ambient),"%.1f C   %.0f%% RH",-45+175.*((v[0]<<8)|v[1])/65536,100.*((v[3]<<8)|v[4])/65536);}}}shtCommand(0xb098);}
+ snprintf(environmentText,sizeof(environmentText),"%s   %s",battery,ambient);
 }
 void footerTime(bool full){
  char t[8]="--:--";if(dateKey.length())strftime(t,sizeof(t),"%H:%M",&localDay);
@@ -203,9 +208,27 @@ void footerTime(bool full){
  uint8_t patch[8*16];for(int y=0;y<16;y++)memcpy(patch+8*y,dateArea.getBuffer()+93*y,8);
  blit(patch,8,720,455,16);if(!full) epdPartialDisplay(patch,720,455,784,471);footMinute=localDay.tm_min;
 }
+bool panelSleeping=false;
+uint32_t lastClean=0;
 void draw(){
+ static int lastMinute=-1, viewBefore=-1, previousStage=-1;
+ static unsigned partials=0, fasts=0;
+ static uint32_t sampled=0;
+ const bool environmentDue=!sampled||millis()-sampled>=600000;
+ if(environmentDue){sampleEnvironment();sampled=millis();}
+ const int view=ringing?PageCount+1:birthdayCard?PageCount:int(page);
+ const bool timer=view==Bed&&stage==1;
  int sec=stage>=3?0:(left()+999)/1000;
- if(!dirty){if((page!=Bed||stage>=3)&&footMinute!=localDay.tm_min){footerTime(false);if(page==Clock&&!ringing&&!birthdayCard){environmentLine();uint8_t patch[40*16];for(int y=0;y<16;y++)memcpy(patch+y*40,imgBuf+(365+y)*100+3,40);epdPartialDisplay(patch,24,365,344,381);}}if(!birthdayCard&&!ringing&&page==Clock)drawClock(false);if(!birthdayCard&&page==Bed&&stage==1&&sec!=lastSecond)drawTimer(sec,false);return;}
+ if(timer&&sec>30)sec=min(360,2*((sec+1)/2));
+ if(panelSleeping&&!dirty&&!forceClean&&!ringing)return;
+ bool full=forceClean||panelSleeping||viewBefore<0||millis()-lastClean>=86400000UL;
+ bool fast=view!=viewBefore||(dirty&&view!=Chat&&view!=Memo)||(view==Memo&&memoChanged);
+ bool minuteDue=localDay.tm_min!=lastMinute;
+ if(timer&&!dirty&&lastSecond==sec)return;
+ if(timer&&!dirty&&!(roomTemp<10)){drawTimer(sec,false);return;}
+ if(!timer&&!dirty&&!minuteDue&&!full&&!(environmentDue&&view==Clock))return;
+ if(timer&&previousStage!=1)fast=true;
+ if(stage==3&&previousStage==1)full=true;
  const uint8_t *art=nullptr;
  if(ringing)art=wake;
  else if(birthdayCard)art=birthday;
@@ -214,37 +237,60 @@ void draw(){
  case Clock:art=poemArt[(localDay.tm_yday%2)*2+note];break;
  case Reading:art=readArt[(localDay.tm_yday%7)*2+hint];break;
  case Bed:art=bedArt[stage];break;
- case Chat:paintedPhase=deskSound::gateway.isEmpty()?5:deskSound::phase.load();art=chatArt[paintedPhase];break;
+ case Chat:paintedPhase=deskSound::gateway.isEmpty()?5:deskSound::phase.load();art=chatArt[0];break;
  case Memo:art=LittleFS.exists(memoPath(dateKey))?memoPage:memoEmpty;break;
  default:return;
  }
  if(previousFrame)memcpy(previousFrame,imgBuf,48000);
  memcpy(imgBuf,art,48000);
  if(!birthdayCard&&!ringing){
-  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);blit(deskLogo,28,24,21,40);dateLabel(header,256,30,3);environmentLine();drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
+  if(page==Clock){char header[72]="Waiting for time";if(dateKey.length())strftime(header,sizeof(header),"%A, %B %d, %Y",&localDay);blit(deskLogo,28,24,21,40);dateLabel(header,256,30,3);dateLabel(environmentText,24,365,2);drawClock(true);dateLabel("6:45 AM  Mon-Fri",24,312,2);}
+  if(page==Chat){for(int y=96;y<395;y++)memset(imgBuf+y*100,255,100);blit(chatBubble,88,40,135,184);blit(chatStatus[paintedPhase],50,248,198,56);}
   if(page==Bed)drawTimer(sec,true);
   if(page==Schedule&&dateKey.length()){tm d=localDay;d.tm_mday+=offset;mktime(&d);dateLabel(dateOf(d),568,41,3);}
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
    lastAddress=WiFi.status()==WL_CONNECTED?cloudState:String("Offline");dateLabel("ink.h-iot.com/jiayi",480,41,2);
    for(int y=425;y<455;y++)memset(imgBuf+y*100,255,100);dateLabel(lastAddress,32,432,2);}
  }
- if(page!=Bed||stage>=3)footerTime(true);
- // 页面切换（包括生日卡和闹铃）先整屏清理。同一页的数据变化仍用局刷。
- const int view=ringing?PageCount+1:birthdayCard?PageCount:int(page);
- static int displayedView=-1;
- if(displayedView<0)epdDisplay(imgBuf);
- else if(displayedView!=view||!previousFrame)epdDisplayFast(imgBuf);
- else epdDisplayChanges(previousFrame,imgBuf);
- displayedView=view;
+ // On the clock, the small footer shares the ten-minute environment update.
+ static int clockFooter=-1;
+ if(view==Clock){
+  if(viewBefore!=Clock||environmentDue||clockFooter<0)clockFooter=localDay.tm_hour*60+localDay.tm_min;
+  char t[8];snprintf(t,sizeof(t),"%02d:%02d",clockFooter/60,clockFooter%60);dateLabel(t,720,455,2);
+ }else if(view!=Bed||stage>=3)footerTime(true);
+ int x0=100,x1=0,y0=480,y1=0,changed=0;
+ if(previousFrame)for(int y=0;y<480;y++)for(int x=0;x<100;x++){
+  int diff=previousFrame[y*100+x]^imgBuf[y*100+x];if(!diff)continue;
+  changed+=__builtin_popcount(diff);x0=min(x0,x);x1=max(x1,x+1);y0=min(y0,y);y1=max(y1,y+1);
+ }
+ if(!previousFrame||changed>800*480*4/10)full=true;
+ if(changed||fast||full){
+  if(roomTemp<5)full=true;
+  else if(roomTemp<10)fast=true;
+  int stride=x1-x0,rows=y1-y0;
+  if(stride>80||rows>240||(!timer&&partials>=23))fast=true;
+  if(fast&&fasts>=3)full=true;
+  if(!fast&&!full&&changed){
+   // Reuse the old frame as scratch only after the bounding box is known.
+   for(int y=0;y<rows;y++)memcpy(previousFrame+y*stride,imgBuf+(y0+y)*100+x0,stride);
+   epdPartialDisplay(previousFrame,x0*8,y0,x1*8,y1);
+   ++partials;
+  }else if(full){epdDisplay(imgBuf);partials=fasts=0;lastClean=millis();}
+  else{epdDisplayFast(imgBuf);partials=0;++fasts;}
+ }
+ panelSleeping=false;forceClean=false;memoChanged=false;
+ viewBefore=view;previousStage=stage;lastMinute=localDay.tm_min;
  dirty=false;
 }
 void press(int key){
+ if(panelSleeping)forceClean=true;
  touched=rotated=millis();
  if(key==0){deskSound::cancel=true;pendingAlarm=ringing=false;birthdayCard=false;page=Clock;dirty=true;return;}
  if(ringing){deskSound::cancel=true;pendingAlarm=false;ringing=false;dirty=true;return;}
  if(birthdayCard){birthdayCard=false;prefs.putString("birth5",dateKey);}
  else if(key!=5){if(page==Chat)deskSound::cancel=true;page=Page((page+PageCount+(key==4?-1:1))%PageCount);offset=1;note=hint=false;}
  else switch(page){
+ case Memo:retryMemo=true;break;
  case Schedule:offset=offset%7+1;break;
  case Clock:note=!note;break;
  case Reading:hint=!hint;break;
@@ -275,7 +321,7 @@ void begin(){
  configTime(8*3600,0,"ntp.aliyun.com","pool.ntp.org");setupParent();
 }
 void poll(){
- calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;praise=true;rotated=touched=millis();page=Bed;saveStep();dirty=true;}
+ calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;forceClean=true;praise=true;rotated=touched=millis();page=Bed;saveStep();dirty=true;}
  if(dateKey.length()&&localDay.tm_wday>=1&&localDay.tm_wday<=5&&localDay.tm_hour==6&&localDay.tm_min==45&&prefs.getString("alarmDay","")!=dateKey){
   prefs.putString("alarmDay",dateKey);deskSound::cancel=true;pendingAlarm=true;ringing=true;birthdayCard=false;page=Clock;dirty=true;
  }
@@ -285,18 +331,21 @@ void poll(){
  if(praise&&!pendingAlarm&&!ringing&&!deskSound::busy){praise=!deskSound::start(2);}
  bool engaged=stage==1||deskSound::busy||ringing||birthdayCard;
  if(engaged)touched=rotated=millis();
- else if(millis()-rotated>=300000){press(6);}
+ else if(!panelSleeping&&millis()-touched<600000&&millis()-rotated>=300000){uint32_t lastInput=touched;press(6);touched=lastInput;}
  parent.handleClient();syncCloudNote();
  if(page==Memo&&(WiFi.status()==WL_CONNECTED?cloudState:String("Offline"))!=lastAddress)dirty=true;
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
  draw();delay(5);
+ // The network may remain online on the notes page while the panel sleeps independently.
+ if(!panelSleeping && !engaged && page!=Memo && millis()-touched>=600000){epdSleep();panelSleeping=true;}
  // Keep the local editor reachable on its page. Sleep between minute boundaries elsewhere.
  // 已校时后即使家庭网络短暂断开，也按分钟唤醒；预留重连时间。
  static uint32_t wifiStarted=0;
  bool networkReady=WiFi.status()==WL_CONNECTED || millis()-wifiStarted>=10000;
  if(!engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=10000 && networkReady && !uxQueueMessagesWaiting(keys)){
   timeval tv;gettimeofday(&tv,nullptr);int64_t us=60000000LL-(tv.tv_sec%60)*1000000LL-tv.tv_usec;
-  us=min(us,(int64_t)max(1L,300000L-(long)(millis()-rotated))*1000);
+  if(!panelSleeping&&millis()-touched<600000)us=min(us,(int64_t)max(1L,300000L-(long)(millis()-rotated))*1000);
+
   if(esp_wifi_stop()!=ESP_OK)return;
   if(esp_sleep_enable_timer_wakeup(us)==ESP_OK)esp_light_sleep_start();
   if(esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_GPIO)touched=millis();

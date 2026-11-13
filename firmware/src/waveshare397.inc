@@ -225,7 +225,6 @@ void EPD_3IN97_Display_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
 
     EPD_3IN97_SendCommand(0x26);
@@ -233,7 +232,6 @@ void EPD_3IN97_Display_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
     EPD_3IN97_TurnOnDisplay();
 }
@@ -249,7 +247,6 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
 
     EPD_3IN97_SendCommand(0x26);
@@ -257,7 +254,6 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
     EPD_3IN97_TurnOnDisplay_Fast();
 }
@@ -403,6 +399,15 @@ void epdPartialDisplay(uint8_t *data, int x0, int y0, int x1, int y1) {
 }
 void epdPartialDisplayWithOld(uint8_t *data, const uint8_t *, int x0, int y0, int x1, int y1) {
     epdPartialDisplay(data, x0, y0, x1, y1);
+}
+// Restore both RAM planes after panel sleep without triggering an optical refresh.
+void epdRestoreFrame(const uint8_t *frame){
+    epdInit();
+    for(int plane=0;plane<2;plane++){
+        address397(0x4e,0);address397(0x4f,H-1);
+        EPD_3IN97_SendCommand(plane?0x26:0x24);
+        for(int i=0;i<W*H/8;i++)EPD_3IN97_SendData(frame[i]);
+    }
 }
 void epdSleep() { EPD_3IN97_Sleep(); }
 // InkSight sends monochrome frames for this profile.

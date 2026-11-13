@@ -30,6 +30,7 @@ void epdPartialDisplay(uint8_t *data, int xStart, int yStart, int xEnd, int yEnd
 void epdPartialDisplayWithOld(uint8_t *data, const uint8_t *oldData, int xStart, int yStart, int xEnd, int yEnd);
 
 #ifdef EPD_PANEL_397_SSD1677
+void epdRestoreFrame(const uint8_t *frame);
 void epdDisplayChanges(const uint8_t *before, const uint8_t *after);
 #endif
 
