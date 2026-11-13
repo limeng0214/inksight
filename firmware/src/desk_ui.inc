@@ -5,6 +5,8 @@
 #include <Adafruit_GFX.h>
 #include <desk_art.inc>
 #include "desk_parent.inc"
+#include "certs.h"
+#include <WiFiClientSecure.h>
 #include <desk_custom.inc>
 #include "desk_sound.inc"
 #include <esp_sleep.h>
@@ -103,6 +105,33 @@ bool validDate(const String &s){
  if(s.length()!=10||s[4]!='-'||s[7]!='-')return false;
  for(int i=0;i<10;i++)if(i!=4&&i!=7&&!isDigit(s[i]))return false;
  return true;
+}
+// A failed download leaves the last complete local copy intact.
+void syncCloudNote(){
+ static uint32_t attempted=0;
+ if(dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||cfgServer!="https://ink.h-iot.com"||
+   stage==1||deskSound::busy||ringing||(attempted&&millis()-attempted<55000))return;
+ attempted=millis();
+ if(cfgPendingPairCode.length()&&!connectWiFi())return;
+ if(!ensureDeviceToken())return;
+ WiFiClientSecure tls;tls.setCACert(ROOT_CA);HTTPClient http;
+ http.setConnectTimeout(2500);http.setTimeout(3000);
+ if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return;
+ http.addHeader("X-Device-Token",cfgDeviceToken);
+ int code=http.GET(),n=http.getSize();
+ if(code!=200||n<memoBytes||n>memoBytes+2000){http.end();return;}
+ uint8_t *buf=(uint8_t*)ps_malloc(n);
+ if(buf&&http.getStream().readBytes(buf,n)==(size_t)n){
+  String path=memoPath(dateKey);File old=LittleFS.open(path,"r");
+  bool same=old&&old.size()==(size_t)n;
+  uint8_t block[256];for(int off=0;same&&off<n;off+=sizeof(block)){int k=min((int)sizeof(block),n-off);
+   same=old.read(block,k)==(size_t)k&&!memcmp(buf+off,block,k);}
+  old.close();
+  if(n==memoBytes){if(LittleFS.exists(path)&&LittleFS.remove(path)&&page==Memo)dirty=true;}
+  else if(!same){File f=LittleFS.open("/cloud.tmp","w");bool ok=f&&f.write(buf,n)==(size_t)n;f.close();
+   if(ok&&LittleFS.rename("/cloud.tmp",path)&&page==Memo)dirty=true;}
+ }
+ free(buf);http.end();
 }
 void setupParent(){
  parent.on("/",HTTP_GET,[]{parent.send_P(200,"text/html;charset=utf-8",parentHTML);});
@@ -237,7 +266,7 @@ void poll(){
  bool engaged=stage==1||deskSound::busy||ringing||birthdayCard;
  if(engaged)touched=rotated=millis();
  else if(millis()-rotated>=300000){press(6);}
- parent.handleClient();
+ parent.handleClient();syncCloudNote();
  if(page==Memo&&(WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():String("offline"))!=lastAddress)dirty=true;
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
  draw();delay(5);

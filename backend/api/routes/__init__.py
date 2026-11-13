@@ -15,7 +15,10 @@ from .uploads import router as uploads_router
 from .user import router as user_router
 from .voice import router as voice_router
 
+from .desk_notes import router as desk_notes_router
+
 api_routers = [
+    desk_notes_router,
     render_router,
     admin_analytics_router,
     config_router,
