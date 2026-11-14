@@ -114,8 +114,13 @@ bool validDate(const String &s){
 // A failed download leaves the last complete local copy intact.
 void syncCloudNote(){
  static uint32_t attempted=0;
+ static bool wasOnMemo=false;
+ bool onMemo=page==Memo&&!birthdayCard&&!ringing;
+ if(onMemo&&!wasOnMemo)retryMemo=true;
+ wasOnMemo=onMemo;
+ const uint32_t interval=onMemo?5000:55000;
  if(dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||cfgServer!="https://ink.h-iot.com"||
-   stage==1||deskSound::busy||ringing||(!retryMemo&&attempted&&millis()-attempted<55000))return;
+   stage==1||deskSound::busy||ringing||(!retryMemo&&attempted&&millis()-attempted<interval))return;
  attempted=millis();retryMemo=false;
  // 家庭版直接读取本机留言，不要求家长绑定账号。
  cloudState="Token failed";
@@ -151,7 +156,7 @@ void syncCloudNote(){
    same=old.read(block,k)==(size_t)k&&!memcmp(buf+off,block,k);}
   old.close();
   cloudState="Cloud OK";
-  if(n==memoBytes){if(LittleFS.exists(path)&&LittleFS.remove(path)&&page==Memo)dirty=true;}
+  if(n==memoBytes){if(LittleFS.exists(path)&&LittleFS.remove(path)){memoChanged=true;if(page==Memo)dirty=true;}}
   else if(!same){File f=LittleFS.open("/cloud.tmp","w");bool ok=f&&f.write(buf,n)==(size_t)n;f.close();
    if(ok&&LittleFS.rename("/cloud.tmp",path)){memoChanged=true;if(page==Memo)dirty=true;}else cloudState="Save failed";}
  }
