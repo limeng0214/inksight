@@ -310,7 +310,8 @@ void draw(){
   else if(roomTemp<10)fast=true;
   int stride=x1-x0,rows=y1-y0;
   if(stride>80||rows>240||(!timer&&partials>=23))fast=true;
-  if(fast&&fasts>=3)full=true;
+  // 六次快刷后，第七次整页更新全刷并清零。
+  if(fast&&fasts>=6)full=true;
   if(!fast&&!full&&changed){
    // Reuse the old frame as scratch only after the bounding box is known.
    for(int y=0;y<rows;y++)memcpy(previousFrame+y*stride,imgBuf+(y0+y)*100+x0,stride);
