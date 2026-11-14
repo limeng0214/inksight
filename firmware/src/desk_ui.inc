@@ -28,6 +28,7 @@ uint32_t touched=0, rotated=0; int footMinute=-1; bool praise=false;
 bool ringing=false, pendingAlarm=false;
 int paintedPhase=-1;
 bool forceClean=false, memoChanged=false, retryMemo=true;
+int batteryPercent=-1;
 float roomTemp=NAN;
 char environmentText[64]="BAT --   -- C   --% RH";
 String dateKey, lastClock, lastAddress, cloudState="Waiting";
@@ -53,7 +54,7 @@ void calendar(){
  tm d;localtime_r(&now,&d);localDay=d;String today=dateOf(d);
  if(today==dateKey)return;
  bool first=dateKey.isEmpty();dateKey=today;offset=1;hint=note=false;
- if(!first)forceClean=true;
+ if(!first){forceClean=true;retryMemo=true;}
  if(stage!=1){remaining=360000;stage=prefs.getString("date5","")==today?prefs.getUChar("stage5",0):0;}
  if(stage>7)stage=0;
  birthdayCard=d.tm_mon==10&&d.tm_mday==21&&prefs.getString("birth5","")!=today;
@@ -112,34 +113,25 @@ bool validDate(const String &s){
  return true;
 }
 // A failed download leaves the last complete local copy intact.
-void syncCloudNote(){
- static uint32_t attempted=0;
- static bool wasOnMemo=false;
- bool onMemo=page==Memo&&!birthdayCard&&!ringing;
- if(onMemo&&!wasOnMemo)retryMemo=true;
- wasOnMemo=onMemo;
- const uint32_t interval=onMemo?5000:55000;
- if(dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||cfgServer!="https://ink.h-iot.com"||
-   stage==1||deskSound::busy||ringing||(!retryMemo&&attempted&&millis()-attempted<interval))return;
- attempted=millis();retryMemo=false;
+bool fetchCloudNote(){
  // 家庭版直接读取本机留言，不要求家长绑定账号。
  cloudState="Token failed";
- if(!ensureDeviceToken())return;
+ if(!ensureDeviceToken())return false;
  WiFiClientSecure tls;tls.setCACert(ROOT_CA);HTTPClient http;
  http.setConnectTimeout(8000);http.setTimeout(8000);
  cloudState="Connect failed";
- if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return;
+ if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return false;
  http.addHeader("X-Device-Token",cfgDeviceToken);
  int code=http.GET(),n=http.getSize();
  Serial.printf("[desk-note] %s HTTP %d, bytes %d\n",dateKey.c_str(),code,n);
  if(code<0){char msg[160]={};int err=tls.lastError(msg,sizeof(msg));Serial.printf("[desk-note] TLS %d %s\n",err,msg);}
  cloudState=code<0?String("Network ")+code:String("HTTP ")+code;
  if(code==200)cloudState="Format error";
- if(code==204)cloudState="No cloud note";
+ if(code==204){cloudState="No cloud note";http.end();return true;}
  if(code==401)clearDeviceToken();
- if(code!=200||n<memoBytes||n>memoBytes+2000){http.end();return;}
+ if(code!=200||n<memoBytes||n>memoBytes+2000){http.end();return false;}
  uint8_t *buf=(uint8_t*)ps_malloc(n);if(!buf)buf=(uint8_t*)malloc(n);
- if(!buf){cloudState="Memory low";http.end();return;}
+ if(!buf){cloudState="Memory low";http.end();return false;}
  // TLS can split the bitmap across records. Wait for each available block.
  int received=0;uint32_t progress=millis(),begin=progress;
  while(received<n && millis()-progress<8000 && millis()-begin<20000){
@@ -161,7 +153,32 @@ void syncCloudNote(){
    if(ok&&LittleFS.rename("/cloud.tmp",path)){memoChanged=true;if(page==Memo)dirty=true;}else cloudState="Save failed";}
  }
  Serial.printf("[desk-note] received %d/%d, %s\n",received,n,cloudState.c_str());
- free(buf);http.end();
+ free(buf);http.end();return cloudState=="Cloud OK";
+}
+
+// Periods are measured from completion, so a slow or failed fetch cannot cause a tight loop.
+void syncCloudNote(){
+ static uint32_t attempted=0;
+ static unsigned failures=0;
+ static String lastSuccess="--:--";
+ static bool wasOnMemo=false;
+ bool onMemo=page==Memo&&!ringing&&!birthdayCard;
+ if(onMemo&&!wasOnMemo)retryMemo=true;
+ wasOnMemo=onMemo;
+ if(stage==1||deskSound::busy||ringing||dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||
+    cfgServer!="https://ink.h-iot.com"||(batteryPercent>=0&&batteryPercent<5))return;
+ uint32_t interval=onMemo?300000UL:900000UL;
+ if(failures){const uint32_t delays[]={30000,120000,300000,900000};interval=delays[min(failures-1,3u)];}
+ if(batteryPercent>=0&&batteryPercent<15)interval=max(interval,uint32_t(1800000));
+ if(attempted&&millis()-attempted<interval&&(!retryMemo||failures))return;
+ retryMemo=false;
+ if(fetchCloudNote()){
+  failures=0;char stamp[8];strftime(stamp,sizeof(stamp),"%H:%M",&localDay);lastSuccess=stamp;
+ }else{
+  failures=min(failures+1,6u);
+  cloudState=failures>=6?"Last sync "+lastSuccess:"Retry later";
+ }
+ attempted=millis();
 }
 void setupParent(){
  parent.on("/",HTTP_GET,[]{parent.send_P(200,"text/html;charset=utf-8",parentHTML);});
@@ -186,7 +203,7 @@ void setupParent(){
    if(text.isEmpty())ok=!LittleFS.exists(path)||LittleFS.remove(path);
    else{File f=LittleFS.open("/desk.tmp","w");ok=f&&f.write(buf,n)==n&&f.print(text)==text.length();f.close();if(ok)ok=LittleFS.rename("/desk.tmp",path);}
   }
-  free(buf);if(ok&&page==Memo&&d==dateKey)dirty=true;parent.send(ok?200:500);
+  free(buf);if(ok&&page==Memo&&d==dateKey){memoChanged=true;dirty=true;}parent.send(ok?200:500);
  });
  parent.on("/gateway",HTTP_POST,[]{
   IPAddress address;
@@ -203,7 +220,7 @@ bool shtCommand(uint16_t command){Wire.beginTransmission(0x70);Wire.write(comman
 bool checked(const uint8_t *p){uint8_t c=255;for(int i=0;i<2;i++){c^=p[i];for(int j=0;j<8;j++)c=c&128?(c<<1)^0x31:c<<1;}return c==p[2];}
 void sampleEnvironment(){
  char info[64],battery[16]="BAT --",ambient[24]="-- C   --% RH";
- int status=reg8(0);if(status>=0){if(status&8){int pct=reg8(0xa4);if(pct>=0&&pct<=100)snprintf(battery,sizeof(battery),"BAT %d%%",pct);}else strcpy(battery,"NO BAT");}
+ batteryPercent=-1;int status=reg8(0);if(status>=0){if(status&8){int pct=reg8(0xa4);if(pct>=0&&pct<=100){batteryPercent=pct;snprintf(battery,sizeof(battery),"BAT %d%%",pct);}}else strcpy(battery,"NO BAT");}
  if(shtCommand(0x3517)){delay(2);if(shtCommand(0x7866)){delay(14);if(Wire.requestFrom(uint8_t(0x70),uint8_t(6))==6){uint8_t v[6];Wire.readBytes(v,6);if(checked(v)&&checked(v+3)){roomTemp=-45+175.*((v[0]<<8)|v[1])/65536;snprintf(ambient,sizeof(ambient),"%.1f C   %.0f%% RH",-45+175.*((v[0]<<8)|v[1])/65536,100.*((v[3]<<8)|v[4])/65536);}}}shtCommand(0xb098);}
  snprintf(environmentText,sizeof(environmentText),"%s   %s",battery,ambient);
 }
@@ -256,6 +273,18 @@ void draw(){
   if(page==Memo){File f=LittleFS.open(memoPath(dateKey),"r");if(f&&f.size()>=memoBytes)for(int y=0;y<memoHeight;y++)f.read(imgBuf+(109+y)*100+4,92);
    lastAddress=WiFi.status()==WL_CONNECTED?cloudState:String("Offline");dateLabel("ink.h-iot.com/jiayi",480,41,2);
    for(int y=425;y<455;y++)memset(imgBuf+y*100,255,100);dateLabel(lastAddress,32,432,2);}
+ }
+ // The large memo rectangle is intentionally exempt from ordinary page-change quotas.
+ if(view==Memo&&viewBefore==Memo&&memoChanged&&!full&&previousFrame&&!(roomTemp<10)){
+  const int first=109,last=first+memoHeight;
+  // The screen outside the message window still contains the previous frame.
+  memcpy(imgBuf,previousFrame,first*100);
+  memcpy(imgBuf+last*100,previousFrame+last*100,(480-last)*100);
+  for(int y=first;y<last;y++)memcpy(previousFrame+(y-first)*92,imgBuf+y*100+4,92);
+  epdPartialDisplay(previousFrame,32,first,32+memoWidth,last);
+  memoChanged=false;dirty=false;lastMinute=-1;
+  // Leave the footer for the next update; the first patch contains only the note itself.
+  lastAddress="";return;
  }
  // On the clock, the small footer shares the ten-minute environment update.
  static int clockFooter=-1;
@@ -326,7 +355,7 @@ void begin(){
  configTime(8*3600,0,"ntp.aliyun.com","pool.ntp.org");setupParent();
 }
 void poll(){
- calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;forceClean=true;praise=true;rotated=touched=millis();page=Bed;saveStep();dirty=true;}
+ calendar();if(stage==1&&!left()){birthdayCard=false;stage=3;forceClean=true;retryMemo=true;praise=true;rotated=touched=millis();page=Bed;saveStep();dirty=true;}
  if(dateKey.length()&&localDay.tm_wday>=1&&localDay.tm_wday<=5&&localDay.tm_hour==6&&localDay.tm_min==45&&prefs.getString("alarmDay","")!=dateKey){
   prefs.putString("alarmDay",dateKey);deskSound::cancel=true;pendingAlarm=true;ringing=true;birthdayCard=false;page=Clock;dirty=true;
  }
@@ -337,17 +366,19 @@ void poll(){
  bool engaged=stage==1||deskSound::busy||ringing||birthdayCard;
  if(engaged)touched=rotated=millis();
  else if(!panelSleeping&&millis()-touched<600000&&millis()-rotated>=300000){uint32_t lastInput=touched;press(6);touched=lastInput;}
- parent.handleClient();syncCloudNote();
- if(page==Memo&&(WiFi.status()==WL_CONNECTED?cloudState:String("Offline"))!=lastAddress)dirty=true;
  int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
- draw();delay(5);
+ parent.handleClient();
+ if(page==Memo&&(WiFi.status()==WL_CONNECTED?cloudState:String("Offline"))!=lastAddress)dirty=true;
+ draw();
+ if(stage!=1&&millis()-rotated>=150)syncCloudNote();
+ delay(5);
  // The network may remain online on the notes page while the panel sleeps independently.
  if(!panelSleeping && !engaged && page!=Memo && millis()-touched>=600000){epdSleep();panelSleeping=true;}
  // Keep the local editor reachable on its page. Sleep between minute boundaries elsewhere.
  // 已校时后即使家庭网络短暂断开，也按分钟唤醒；预留重连时间。
  static uint32_t wifiStarted=0;
  bool networkReady=WiFi.status()==WL_CONNECTED || millis()-wifiStarted>=10000;
- if(!engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=10000 && networkReady && !uxQueueMessagesWaiting(keys)){
+ if(stage!=1 && !engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=60000 && networkReady && !uxQueueMessagesWaiting(keys)){
   timeval tv;gettimeofday(&tv,nullptr);int64_t us=60000000LL-(tv.tv_sec%60)*1000000LL-tv.tv_usec;
   if(!panelSleeping&&millis()-touched<600000)us=min(us,(int64_t)max(1L,300000L-(long)(millis()-rotated))*1000);
 
