@@ -29,6 +29,8 @@ bool ringing=false, pendingAlarm=false;
 int paintedPhase=-1;
 bool forceClean=false, memoChanged=false, retryMemo=true;
 int batteryPercent=-1;
+uint32_t nextNetwork=0;
+bool networkEnabled=true;
 float roomTemp=NAN;
 char environmentText[64]="BAT --   -- C   --% RH";
 String dateKey, lastClock, lastAddress, cloudState="Waiting";
@@ -118,7 +120,7 @@ bool fetchCloudNote(){
  cloudState="Token failed";
  if(!ensureDeviceToken())return false;
  WiFiClientSecure tls;tls.setCACert(ROOT_CA);HTTPClient http;
- http.setConnectTimeout(8000);http.setTimeout(8000);
+ http.setConnectTimeout(1500);http.setTimeout(1500);tls.setHandshakeTimeout(2);
  cloudState="Connect failed";
  if(!http.begin(tls,cfgServer+"/api/desk-notes/"+WiFi.macAddress()+"/"+dateKey+"?device=true"))return false;
  http.addHeader("X-Device-Token",cfgDeviceToken);
@@ -134,7 +136,8 @@ bool fetchCloudNote(){
  if(!buf){cloudState="Memory low";http.end();return false;}
  // TLS can split the bitmap across records. Wait for each available block.
  int received=0;uint32_t progress=millis(),begin=progress;
- while(received<n && millis()-progress<8000 && millis()-begin<20000){
+ while(received<n && millis()-progress<1500 && millis()-begin<3000){
+  if(uxQueueMessagesWaiting(keys)){free(buf);http.end();retryMemo=true;return false;}
   int available=tls.available();
   if(available>0){int got=tls.read(buf+received,min(available,n-received));if(got>0){received+=got;progress=millis();continue;}}
   if(!http.connected())break;
@@ -165,7 +168,7 @@ void syncCloudNote(){
  bool onMemo=page==Memo&&!ringing&&!birthdayCard;
  if(onMemo&&!wasOnMemo)retryMemo=true;
  wasOnMemo=onMemo;
- if(stage==1||deskSound::busy||ringing||dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||
+ if(uxQueueMessagesWaiting(keys)||stage==1||deskSound::busy||ringing||dateKey.isEmpty()||WiFi.status()!=WL_CONNECTED||
     cfgServer!="https://ink.h-iot.com"||(batteryPercent>=0&&batteryPercent<5))return;
  uint32_t interval=onMemo?300000UL:900000UL;
  if(failures){const uint32_t delays[]={30000,120000,300000,900000};interval=delays[min(failures-1,3u)];}
@@ -179,6 +182,10 @@ void syncCloudNote(){
   cloudState=failures>=6?"Last sync "+lastSuccess:"Retry later";
  }
  attempted=millis();
+ uint32_t nextInterval=onMemo?300000UL:900000UL;
+ if(failures){const uint32_t waits[]={30000,120000,300000,900000};nextInterval=waits[min(failures-1,3u)];}
+ if(batteryPercent>=0&&batteryPercent<15)nextInterval=max(nextInterval,uint32_t(1800000));
+ nextNetwork=attempted+nextInterval;
 }
 void setupParent(){
  parent.on("/",HTTP_GET,[]{parent.send_P(200,"text/html;charset=utf-8",parentHTML);});
@@ -366,26 +373,36 @@ void poll(){
  bool engaged=stage==1||deskSound::busy||ringing||birthdayCard;
  if(engaged)touched=rotated=millis();
  else if(!panelSleeping&&millis()-touched<600000&&millis()-rotated>=300000){uint32_t lastInput=touched;press(6);touched=lastInput;}
- int key;if(xQueueReceive(keys,&key,0)==pdTRUE)press(key);
+ // Apply queued navigation before drawing, avoiding a slow redraw for every old scroll.
+ int key;for(int count=0;count<12&&xQueueReceive(keys,&key,0)==pdTRUE;count++)press(key);
  parent.handleClient();
  if(page==Memo&&(WiFi.status()==WL_CONNECTED?cloudState:String("Offline"))!=lastAddress)dirty=true;
  draw();
- if(stage!=1&&millis()-rotated>=150)syncCloudNote();
+ if(stage!=1&&millis()-rotated>=150&&!uxQueueMessagesWaiting(keys))syncCloudNote();
  delay(5);
  // The network may remain online on the notes page while the panel sleeps independently.
  if(!panelSleeping && !engaged && page!=Memo && millis()-touched>=600000){epdSleep();panelSleeping=true;}
  // Keep the local editor reachable on its page. Sleep between minute boundaries elsewhere.
  // 已校时后即使家庭网络短暂断开，也按分钟唤醒；预留重连时间。
  static uint32_t wifiStarted=0;
- bool networkReady=WiFi.status()==WL_CONNECTED || millis()-wifiStarted>=10000;
+ bool networkReady=!networkEnabled || WiFi.status()==WL_CONNECTED || millis()-wifiStarted>=10000;
  if(stage!=1 && !engaged && !dirty && page!=Memo && dateKey.length() && millis()-touched>=60000 && networkReady && !uxQueueMessagesWaiting(keys)){
   timeval tv;gettimeofday(&tv,nullptr);int64_t us=60000000LL-(tv.tv_sec%60)*1000000LL-tv.tv_usec;
   if(!panelSleeping&&millis()-touched<600000)us=min(us,(int64_t)max(1L,300000L-(long)(millis()-rotated))*1000);
 
-  if(esp_wifi_stop()!=ESP_OK)return;
+  if(networkEnabled&&esp_wifi_stop()!=ESP_OK)return;
+  networkEnabled=false;
   if(esp_sleep_enable_timer_wakeup(us)==ESP_OK)esp_light_sleep_start();
   if(esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_GPIO)touched=millis();
-  esp_wifi_start();WiFi.reconnect();wifiStarted=millis();delay(40);
+  bool keyWake=esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_GPIO;
+  time_t now=time(nullptr);tm wakeTime;localtime_r(&now,&wakeTime);
+  bool midnight=wakeTime.tm_hour==0&&wakeTime.tm_min==0;
+  bool alarm=wakeTime.tm_wday>=1&&wakeTime.tm_wday<=5&&wakeTime.tm_hour==6&&wakeTime.tm_min==45;
+  if(keyWake||midnight||alarm||int32_t(millis()-nextNetwork)>=0){
+   esp_wifi_start();WiFi.reconnect();networkEnabled=true;wifiStarted=millis();
+   if(keyWake||midnight||alarm)retryMemo=true;
+  }
+  delay(40);
  }
 }
 }
